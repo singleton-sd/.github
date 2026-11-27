@@ -1,0 +1,53 @@
+# CI for this repository. Reusable workflows only run on workflow_call, so
+# they never execute here. This job lints the YAML and checks the smoke script.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSLf -o "/tmp/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          tar -xzf "/tmp/${archive}" -C /tmp actionlint
+          echo /tmp >> "$GITHUB_PATH"
+
+      - name: Run actionlint
+        run: actionlint -color .github/workflows/*.yml workflow-templates/*.yml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Syntax-check smoke-live.mjs
+        run: node --check scripts/smoke-live.mjs
+
+      - name: Smoke live LeaseMate production
+        run: |
+          node scripts/smoke-live.mjs \
+            --url https://leasemate.singletonsd.com/ \
+            --expect-title LeaseMate \
+            --timeout-ms 60000 \
+            --interval-ms 10000

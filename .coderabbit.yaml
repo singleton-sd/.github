@@ -1,5 +1,0 @@
-# House PRs stay draft until required checks are green. Review drafts so
-# the CodeRabbit required check can run before a PR is marked ready.
-reviews:
-  auto_review:
-    drafts: true
