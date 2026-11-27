@@ -18,7 +18,6 @@ jobs:
     uses: singleton-sd/.github/.github/workflows/pages-build-and-verify.yml@v1
     permissions:
       contents: read
-      actions: write
 ```
 
 The double `.github` is required: `{owner}/{repo}/.github/workflows/{file}@{ref}`.
@@ -99,7 +98,6 @@ jobs:
     uses: singleton-sd/.github/.github/workflows/pages-build-and-verify.yml@v1
     permissions:
       contents: read
-      actions: write
     with:
       turnstile_policy: when-lead-intake-enabled
       artifact_name: pages-dist

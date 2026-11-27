@@ -97,14 +97,21 @@ function extractTitle(html) {
   return m ? decodeEntities(m[1]).replace(/\s+/g, " ").trim() : "";
 }
 
+function htmlAttr(tag, name) {
+  const quoted = tag.match(new RegExp(`\\b${name}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, "i"));
+  if (quoted) return quoted[2];
+  const unquoted = tag.match(new RegExp(`\\b${name}\\s*=\\s*([^\\s"'=<>\`]+)`, "i"));
+  return unquoted ? unquoted[1] : "";
+}
+
 function extractAssets(html, baseUrl) {
   const assets = [];
   const linkRe = /<link\b[^>]*>/gi;
   let m;
   while ((m = linkRe.exec(html))) {
     const tag = m[0];
-    const rel = (tag.match(/\brel\s*=\s*["']([^"']+)["']/i) || [])[1] || "";
-    const href = (tag.match(/\bhref\s*=\s*["']([^"']+)["']/i) || [])[1];
+    const rel = htmlAttr(tag, "rel");
+    const href = htmlAttr(tag, "href");
     if (href && rel.split(/\s+/).some((r) => r.toLowerCase() === "stylesheet")) {
       assets.push({ kind: "stylesheet", url: new URL(href, baseUrl).href });
     }
@@ -112,13 +119,14 @@ function extractAssets(html, baseUrl) {
   const scriptRe = /<script\b[^>]*>/gi;
   while ((m = scriptRe.exec(html))) {
     const tag = m[0];
-    const src = (tag.match(/\bsrc\s*=\s*["']([^"']+)["']/i) || [])[1];
+    const src = htmlAttr(tag, "src");
     if (src) assets.push({ kind: "script", url: new URL(src, baseUrl).href });
   }
   const seen = new Set();
   return assets.filter((a) => {
-    if (seen.has(a.url)) return false;
-    seen.add(a.url);
+    const key = `${a.kind} ${a.url}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return a.url.startsWith("http://") || a.url.startsWith("https://");
   });
 }

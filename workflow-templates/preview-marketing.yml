@@ -27,7 +27,6 @@ jobs:
     uses: singleton-sd/.github/.github/workflows/pages-build-and-verify.yml@v1
     permissions:
       contents: read
-      actions: write
     with:
       turnstile_policy: always
       preview_base_path: /pr-preview/pr-${{ github.event.number }}/

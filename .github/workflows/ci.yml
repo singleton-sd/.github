@@ -44,6 +44,12 @@ jobs:
       - name: Syntax-check smoke-live.mjs
         run: node --check scripts/smoke-live.mjs
 
+      - name: Test smoke-live.mjs
+        run: node --test scripts/smoke-live.test.mjs
+
+      - name: Test Turnstile policy guard
+        run: bash scripts/check-turnstile-policy.test.sh
+
       - name: Smoke live LeaseMate production
         run: |
           node scripts/smoke-live.mjs \

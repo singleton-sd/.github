@@ -48,7 +48,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
   build:
@@ -56,7 +55,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      actions: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,6 +91,7 @@ jobs:
           PUBLIC_TURNSTILE_SITE_KEY: ${{ inputs.public_turnstile_site_key || vars.PUBLIC_TURNSTILE_SITE_KEY }}
         run: |
           set -euo pipefail
+          # Keep in sync with scripts/check-turnstile-policy.sh (tested in CI).
           case "${PUBLIC_LEAD_INTAKE_ENABLED:-}" in
             true|TRUE|1|yes|YES) enabled=1 ;;
             *) enabled=0 ;;

@@ -125,6 +125,7 @@ jobs:
           folder: ${{ inputs.dist_path }}
           clean: true
           clean-exclude: ${{ inputs.preview_umbrella }}
+          force: false
 
       # pr-preview-action is composite; wretry cannot wrap it. Retry push races
       # against production / other previews with a second attempt.
