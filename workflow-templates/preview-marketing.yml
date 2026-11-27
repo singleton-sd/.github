@@ -1,0 +1,84 @@
+# Org starter: PR preview GitHub Pages for a marketing site.
+# Pin reusable workflows at @v1, never @main.
+# Secrets are not stored in singleton-sd/.github; pass them from the caller.
+#
+# Visual-review, sticky preview comments, and extra Playwright jobs stay in
+# the caller so the first consumer PRs stay small.
+#
+# Replace the Pages origin and smoke title before using.
+name: Deploy pull request preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+concurrency:
+  group: preview-pr-${{ github.event.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)
+    uses: singleton-sd/.github/.github/workflows/pages-build-and-verify.yml@v1
+    permissions:
+      contents: read
+      actions: write
+    with:
+      turnstile_policy: always
+      preview_base_path: /pr-preview/pr-${{ github.event.number }}/
+      artifact_name: preview-dist
+      # Cloudflare Turnstile always-pass dummy site key (public, not a secret).
+      public_turnstile_site_key: ${{ vars.PUBLIC_TURNSTILE_SITE_KEY || '1x00000000000000000000AA' }}
+
+  deploy:
+    needs: build
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)
+    uses: singleton-sd/.github/.github/workflows/pages-deploy.yml@v1
+    permissions:
+      contents: read
+      actions: read
+    with:
+      mode: preview
+      preview_action: deploy
+      preview_umbrella: pr-preview
+      pages_base_url: https://example.singletonsd.com
+      repository: ${{ github.event.repository.name }}
+      artifact_name: preview-dist
+    secrets:
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+  smoke:
+    needs: deploy
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)
+    uses: singleton-sd/.github/.github/workflows/pages-smoke.yml@v1
+    permissions:
+      contents: read
+    with:
+      url: https://example.singletonsd.com/pr-preview/pr-${{ github.event.number }}/
+      expect_title: Example
+
+  cleanup:
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.action == 'closed'
+    uses: singleton-sd/.github/.github/workflows/pages-deploy.yml@v1
+    permissions:
+      contents: read
+      actions: read
+    with:
+      mode: preview
+      preview_action: remove
+      preview_umbrella: pr-preview
+      pages_base_url: https://example.singletonsd.com
+      repository: ${{ github.event.repository.name }}
+    secrets:
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
