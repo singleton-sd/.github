@@ -1,6 +1,7 @@
 # Reusable marketing Pages deploy. Callers pin @v1, never @main.
 # Secrets are never stored in singleton-sd/.github; pass RELEASE_APP_PRIVATE_KEY
 # via secrets:. App ID comes from the caller's vars.RELEASE_APP_ID.
+# Naming: ADR-011 (Singleton SD reusable workflow naming).
 name: Pages deploy
 
 on:
@@ -10,8 +11,12 @@ on:
         description: production (gh-pages root) or preview (pr-preview umbrella)
         type: string
         required: true
+      working_directory:
+        description: Site package directory relative to the repository root
+        type: string
+        default: "."
       dist_path:
-        description: Directory that holds the downloaded dist
+        description: Directory that holds the downloaded dist, relative to working_directory
         type: string
         default: dist
       preview_umbrella:
@@ -25,7 +30,7 @@ on:
         type: string
         default: ""
       artifact_name:
-        description: Artifact uploaded by pages-build-and-verify
+        description: Artifact uploaded by pages-build
         type: string
         default: pages-dist
       pages_base_url:
@@ -91,12 +96,12 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ inputs.artifact_name }}
-          path: ${{ inputs.dist_path }}
+          path: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
 
       - name: Ensure .nojekyll for GitHub Pages
         if: inputs.mode == 'production' || inputs.preview_action != 'remove'
         env:
-          DIST_PATH: ${{ inputs.dist_path }}
+          DIST_PATH: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
         run: |
           set -euo pipefail
           mkdir -p "${DIST_PATH}"
@@ -122,7 +127,7 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           branch: gh-pages
-          folder: ${{ inputs.dist_path }}
+          folder: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
           clean: true
           clean-exclude: ${{ inputs.preview_umbrella }}
           force: false
@@ -136,7 +141,7 @@ jobs:
         uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
         with:
           token: ${{ steps.app-token.outputs.token }}
-          source-dir: ${{ inputs.dist_path }}
+          source-dir: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
           preview-branch: gh-pages
           pages-base-url: ${{ inputs.pages_base_url }}
           umbrella-dir: ${{ inputs.preview_umbrella }}
@@ -148,7 +153,7 @@ jobs:
         uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
         with:
           token: ${{ steps.app-token.outputs.token }}
-          source-dir: ${{ inputs.dist_path }}
+          source-dir: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
           preview-branch: gh-pages
           pages-base-url: ${{ inputs.pages_base_url }}
           umbrella-dir: ${{ inputs.preview_umbrella }}

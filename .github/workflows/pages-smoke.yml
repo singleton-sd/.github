@@ -1,5 +1,5 @@
 # Reusable live GitHub Pages smoke check. Callers pin @v1, never @main.
-# Checks out singleton-sd/.github at v1 and runs scripts/smoke-live.mjs.
+# Checks out this reusable workflow's own repo and SHA (never a hardcoded v1).
 # A cached GitHub Pages 404 cannot pass: the index must be HTTP 200 and
 # contain the expected title and/or root needle, and every stylesheet/script
 # must be HTTP 200 with a CSS/JS content-type (HTML 404 bodies fail).
@@ -49,8 +49,8 @@ jobs:
       - name: Check out shared smoke script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: singleton-sd/.github
-          ref: v1
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           persist-credentials: false
           path: .github-workflows-src
 

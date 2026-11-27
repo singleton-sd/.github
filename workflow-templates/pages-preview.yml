@@ -24,7 +24,7 @@ jobs:
     if: >
       github.event.pull_request.head.repo.full_name == github.repository &&
       contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)
-    uses: singleton-sd/.github/.github/workflows/pages-build-and-verify.yml@v1
+    uses: singleton-sd/.github/.github/workflows/pages-build.yml@v1
     permissions:
       contents: read
     with:

@@ -1,6 +1,7 @@
 # Reusable marketing Pages build. No secrets. Callers pin @v1, never @main.
 # PUBLIC_* values come from caller repository variables unless overridden.
-name: Pages build and verify
+# Naming: ADR-011 (Singleton SD reusable workflow naming).
+name: Pages build
 
 on:
   workflow_call:
@@ -9,8 +10,12 @@ on:
         description: Node.js version for setup-node
         type: string
         default: "24"
+      working_directory:
+        description: Site package directory relative to the repository root
+        type: string
+        default: "."
       dist_path:
-        description: Build output directory to upload
+        description: Build output directory, relative to working_directory
         type: string
         default: dist
       turnstile_policy:
@@ -55,6 +60,9 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,6 +79,7 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
           cache: pnpm
+          cache-dependency-path: ${{ inputs.working_directory }}/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -91,7 +100,7 @@ jobs:
           PUBLIC_TURNSTILE_SITE_KEY: ${{ inputs.public_turnstile_site_key || vars.PUBLIC_TURNSTILE_SITE_KEY }}
         run: |
           set -euo pipefail
-          # Keep in sync with scripts/check-turnstile-policy.sh (tested in CI).
+          # Keep in sync with scripts/check-turnstile-policy.sh (tested in self-test).
           case "${PUBLIC_LEAD_INTAKE_ENABLED:-}" in
             true|TRUE|1|yes|YES) enabled=1 ;;
             *) enabled=0 ;;
@@ -148,7 +157,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ inputs.artifact_name }}
-          path: ${{ inputs.dist_path }}
+          path: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1

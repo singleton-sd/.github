@@ -1,0 +1,8 @@
+# actionlint 1.7.12 does not type job.workflow_repository / job.workflow_sha
+# (GitHub job context, Sep 2026). pages-smoke.yml checks out this reusable
+# workflow's own repo and SHA; it must not pin self-checkout at v1.
+paths:
+  .github/workflows/pages-smoke.yml:
+    ignore:
+      - 'property "workflow_repository" is not defined'
+      - 'property "workflow_sha" is not defined'

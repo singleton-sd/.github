@@ -3,6 +3,8 @@
 Shared GitHub Actions workflows and org workflow templates for Singleton SD
 marketing sites (Pages build, deploy, and live smoke checks).
 
+Naming follows ADR-011 (Singleton SD reusable workflow naming).
+
 Callers **must pin `@v1`**, never `@main`. The `v1` tag is cut after the
 workflows land on `main`; do not follow a branch.
 
@@ -15,7 +17,7 @@ This repository stores **no secrets**. Callers pass secrets through the
 ```yaml
 jobs:
   build:
-    uses: singleton-sd/.github/.github/workflows/pages-build-and-verify.yml@v1
+    uses: singleton-sd/.github/.github/workflows/pages-build.yml@v1
     permissions:
       contents: read
 ```
@@ -26,21 +28,22 @@ The double `.github` is required: `{owner}/{repo}/.github/workflows/{file}@{ref}
 
 | Workflow | Role |
 | --- | --- |
-| [`pages-build-and-verify.yml`](.github/workflows/pages-build-and-verify.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact |
+| [`pages-build.yml`](.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact |
 | [`pages-deploy.yml`](.github/workflows/pages-deploy.yml) | Download artifact, rewrite `.nojekyll`, mint singleton-release App token, deploy production or preview |
-| [`pages-smoke.yml`](.github/workflows/pages-smoke.yml) | Check out this repo at `v1` and run [`scripts/smoke-live.mjs`](scripts/smoke-live.mjs) against the live URL |
+| [`pages-smoke.yml`](.github/workflows/pages-smoke.yml) | Check out this reusable workflow's own repo and SHA and run [`scripts/smoke-live.mjs`](scripts/smoke-live.mjs) against the live URL |
+| [`self-ci.yml`](.github/workflows/self-ci.yml) | This repo's required checks `self-ci` (actionlint + live smoke) and `self-test` (`node --check` and script tests) |
 
 Org starters (copied into a new repo from the workflow template picker):
 
-- [`workflow-templates/pages-marketing.yml`](workflow-templates/pages-marketing.yml) — production
-- [`workflow-templates/preview-marketing.yml`](workflow-templates/preview-marketing.yml) — PR preview + cleanup
+- [`workflow-templates/pages-production.yml`](workflow-templates/pages-production.yml) — production
+- [`workflow-templates/pages-preview.yml`](workflow-templates/pages-preview.yml) — PR preview + cleanup
 
 Visual-review, sticky preview comments, and extra Playwright jobs stay in the
 caller.
 
 ## Inputs and secrets
 
-### `pages-build-and-verify.yml`
+### `pages-build.yml`
 
 No secrets. Reads `vars.PUBLIC_LEAD_INTAKE_ENABLED`,
 `vars.PUBLIC_TURNSTILE_SITE_KEY`, and `vars.PUBLIC_LEADS_API_URL` from the
@@ -49,7 +52,8 @@ caller unless overridden.
 | Input | Default | Notes |
 | --- | --- | --- |
 | `node_version` | `24` | |
-| `dist_path` | `dist` | |
+| `working_directory` | `.` | Site package directory relative to the repository root |
+| `dist_path` | `dist` | Relative to `working_directory` |
 | `turnstile_policy` | `when-lead-intake-enabled` | `always` requires the public Turnstile site key on every build |
 | `preview_base_path` | `""` | Set on preview builds (for example `/pr-preview/pr-12/`) |
 | `run_a11y` | `true` | |
@@ -63,7 +67,8 @@ caller unless overridden.
 | Input | Default | Notes |
 | --- | --- | --- |
 | `mode` | required | `production` or `preview` |
-| `dist_path` | `dist` | |
+| `working_directory` | `.` | Site package directory relative to the repository root |
+| `dist_path` | `dist` | Relative to `working_directory` |
 | `preview_umbrella` | `pr-preview` | Also used as JamesIves `clean-exclude` so production does not wipe previews |
 | `repository` | caller repo name | App token allow-list (name without owner) |
 | `artifact_name` | `pages-dist` | Skip download when `preview_action` is `remove` |
@@ -79,7 +84,9 @@ used to push `gh-pages`. Jobs never use `GITHUB_TOKEN` for deploy.
 
 ### `pages-smoke.yml`
 
-No secrets.
+No secrets. The smoke job checks out `${{ job.workflow_repository }}` at
+`${{ job.workflow_sha }}` so the script matches the reusable workflow commit
+the caller pinned. It does not hard-code `v1`.
 
 | Input | Default | Notes |
 | --- | --- | --- |
@@ -95,7 +102,7 @@ Production (`pages.yml`):
 ```yaml
 jobs:
   build:
-    uses: singleton-sd/.github/.github/workflows/pages-build-and-verify.yml@v1
+    uses: singleton-sd/.github/.github/workflows/pages-build.yml@v1
     permissions:
       contents: read
     with:
@@ -124,7 +131,7 @@ jobs:
 
 Preview jobs also pass `preview_base_path`, `artifact_name: preview-dist`,
 `mode: preview`, `pages_base_url`, and `preview_action: deploy` (or `remove`
-on `pull_request` closed).
+on `pull_request` closed). Nested site packages pass `working_directory`.
 
 ## `.nojekyll`
 

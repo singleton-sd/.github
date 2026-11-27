@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Keep in sync with the "Require Turnstile site key" step in
-# .github/workflows/pages-build-and-verify.yml
+# .github/workflows/pages-build.yml
 set -euo pipefail
 case "${PUBLIC_LEAD_INTAKE_ENABLED:-}" in
   true|TRUE|1|yes|YES) enabled=1 ;;
