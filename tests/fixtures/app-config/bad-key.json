@@ -1,0 +1,10 @@
+[
+  {
+    "key": "PUBLIC_BAD-NAME",
+    "label": null,
+    "value": "nope",
+    "contentType": "",
+    "etag": "etag-bad",
+    "lastModified": "2026-01-07T00:00:00+00:00"
+  }
+]

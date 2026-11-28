@@ -1,0 +1,10 @@
+[
+  {
+    "key": "PUBLIC_SECRET_THING",
+    "label": null,
+    "value": "{\"uri\":\"https://kv-should-not-appear.vault.azure.net/secrets/leaked\"}",
+    "contentType": "application/vnd.microsoft.appconfig.keyvaultref+json",
+    "etag": "etag-kv",
+    "lastModified": "2026-01-05T00:00:00+00:00"
+  }
+]

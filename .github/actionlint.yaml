@@ -10,3 +10,13 @@ paths:
     ignore:
       - 'property "workflow_repository" is not defined'
       - 'property "workflow_sha" is not defined'
+  .github/workflows/pages-build.yml:
+    ignore:
+      - 'property "workflow_repository" is not defined'
+      - 'property "workflow_sha" is not defined'
+      # GitHub accepts expressions here; actionlint 1.7.12 does not.
+      - 'is invalid as permission of scope "id-token"'
+  .github/workflows/config-read.yml:
+    ignore:
+      - 'property "workflow_repository" is not defined'
+      - 'property "workflow_sha" is not defined'

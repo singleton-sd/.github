@@ -1,0 +1,114 @@
+# Read public build settings from Azure App Configuration into GITHUB_ENV.
+# Uses --endpoint + --auth-mode login. Never --name, never Key Vault resolve.
+name: App Configuration read
+description: >-
+  Read unlabeled then repo-label App Configuration keys with public prefixes
+  into GITHUB_ENV. Key Vault references fail the step and are never printed.
+inputs:
+  endpoint:
+    description: >-
+      string (optional). Azure App Configuration data-plane endpoint. Use
+      --endpoint; do not pass a store name.
+    required: false
+    default: "https://ssd-global-appcs-build-prod-ae.azconfig.io"
+  label:
+    description: >-
+      string (optional). Repo-specific App Configuration label. Empty uses
+      the caller repository name.
+    required: false
+    default: ""
+  key_prefixes:
+    description: >-
+      string (optional). Comma-separated key prefixes to export as
+      environment variables.
+    required: false
+    default: "PUBLIC_,NEXT_PUBLIC_"
+  client_id:
+    description: string (optional). Entra application (client) ID. Not a secret.
+    required: false
+    default: "4764ad98-0805-485d-8167-123cb7e90f63"
+  tenant_id:
+    description: string (optional). Entra tenant ID. Not a secret.
+    required: false
+    default: "9a0e57d7-e58e-4e8b-814d-037cd7d9015c"
+  subscription_id:
+    description: string (optional). Azure subscription ID. Not a secret.
+    required: false
+    default: "01c0bb8b-3770-4765-979a-cb13ae7e3dd2"
+  login:
+    description: >-
+      string (optional). When true, sign in with actions/azure-oidc-login.
+      When false, the caller already signed in (or tests stubbed az).
+    required: false
+    default: "true"
+outputs:
+  count:
+    description: Number of keys exported to GITHUB_ENV
+    value: ${{ steps.apply.outputs.count }}
+  applied:
+    description: JSON object of applied keys and values
+    value: ${{ steps.apply.outputs.applied }}
+
+runs:
+  using: composite
+  steps:
+    - name: Azure OIDC login
+      if: ${{ inputs.login == 'true' }}
+      uses: ./../azure-oidc-login # zizmor: ignore[self-repository]
+      with:
+        client-id: ${{ inputs.client_id }}
+        tenant-id: ${{ inputs.tenant_id }}
+        subscription-id: ${{ inputs.subscription_id }}
+
+    - name: Read App Configuration keys
+      id: apply
+      shell: bash
+      env:
+        APP_CONFIG_ENDPOINT: ${{ inputs.endpoint }}
+        APP_CONFIG_LABEL_INPUT: ${{ inputs.label }}
+        APP_CONFIG_REPO_NAME: ${{ github.event.repository.name }}
+        APP_CONFIG_KEY_PREFIXES: ${{ inputs.key_prefixes }}
+      run: |
+        set -euo pipefail
+        REPO_ROOT="$(cd "${GITHUB_ACTION_PATH}/../.." && pwd)"
+        label="${APP_CONFIG_LABEL_INPUT:-}"
+        if [ -z "$label" ]; then
+          label="${APP_CONFIG_REPO_NAME:-}"
+        fi
+        if [ -z "$label" ]; then
+          echo "::error::label is empty and github.event.repository.name is unavailable."
+          exit 1
+        fi
+        export APP_CONFIG_LABEL="$label"
+        export APP_CONFIG_STORE="ssd-global-appcs-build-prod-ae"
+        bash "${REPO_ROOT}/scripts/app-config-list.sh" \
+          | node "${REPO_ROOT}/scripts/app-config-apply.mjs"
+
+    - name: Write job summary
+      shell: bash
+      env:
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        HEAD_SHA: ${{ github.sha }}
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_PATH: ${{ github.action_path }}
+        COUNT: ${{ steps.apply.outputs.count }}
+      run: |
+        set -euo pipefail
+        if [ -z "${GITHUB_STEP_SUMMARY:-}" ]; then
+          echo "::error::GITHUB_STEP_SUMMARY is not set."
+          exit 1
+        fi
+        action_ref="${ACTION_REF:-}"
+        if [ -z "$action_ref" ]; then
+          action_ref_display="(empty; local path, see action_path)"
+        else
+          action_ref_display="$action_ref"
+        fi
+        {
+          echo "- keys applied: \`${COUNT:-0}\`"
+          echo "- action_ref: \`${action_ref_display}\`"
+          echo "- action_path: \`${ACTION_PATH}\`"
+          echo "- workflow_ref: \`${WORKFLOW_REF}\`"
+          echo "- sha: \`${HEAD_SHA}\`"
+          echo
+        } >> "$GITHUB_STEP_SUMMARY"

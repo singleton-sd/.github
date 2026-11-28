@@ -4,6 +4,8 @@ Hand-maintained. The `self-release` job does not rewrite or commit this file.
 
 ## Unreleased
 
+- Added `actions/app-config-read`, reusable `config-read.yml`, and a
+  `pages-build` `app_config` input for public Azure App Configuration reads.
 - Documented the shared workflow contract, area docs, contract lint, `self-test`
   fixture calls, `actions.lock`, and Dependabot.
 - Renamed the release workflow to `self-release`.

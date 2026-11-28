@@ -4,7 +4,7 @@ Reusable marketing GitHub Pages pipeline. Callers pin `@v1`.
 
 | Workflow | Role |
 | --- | --- |
-| [`pages-build.yml`](../.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact |
+| [`pages-build.yml`](../.github/workflows/pages-build.yml) | Install, format, lint, test, optional App Configuration read (`app_config`), Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact |
 | [`pages-deploy.yml`](../.github/workflows/pages-deploy.yml) | Download artifact, rewrite `.nojekyll`, mint singleton-release App token, deploy production or preview. `dry_run: true` skips the token and push. |
 | [`pages-smoke.yml`](../.github/workflows/pages-smoke.yml) | Check out this reusable workflow's own repo and SHA and run [`scripts/smoke-live.mjs`](../scripts/smoke-live.mjs) against the live URL |
 

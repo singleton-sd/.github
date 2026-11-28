@@ -776,6 +776,185 @@ jobs:
             exit 1
           fi
 
+  # Never runs. Satisfies the reusable-workflow self-test caller contract.
+  # The composite is exercised below with an az stub (no Azure).
+  config-read:
+    name: config-read
+    if: ${{ github.run_attempt == 0 }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/config-read.yml # zizmor: ignore[self-repository]
+    with:
+      login: false
+
+  app-config-read:
+    name: app-config-read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Never runs. Records the nested azure/login pin from
+      # ./actions/azure-oidc-login so actions.lock can cover this workflow.
+      - name: Lock nested Azure OIDC login pin
+        if: ${{ github.run_attempt == 0 }}
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: 00000000-0000-0000-0000-000000000000
+          tenant-id: 00000000-0000-0000-0000-000000000000
+          subscription-id: 00000000-0000-0000-0000-000000000000
+
+      - name: Install az stub
+        env:
+          FIXTURE: tests/fixtures/app-config/happy-path.json
+        run: |
+          set -euo pipefail
+          stub_dir="${RUNNER_TEMP}/app-config-az-stub"
+          mkdir -p "$stub_dir"
+          cp tests/fixtures/app-config/az-stub.sh "${stub_dir}/az"
+          chmod +x "${stub_dir}/az"
+          echo "$stub_dir" >> "$GITHUB_PATH"
+          echo "APP_CONFIG_FIXTURE=${GITHUB_WORKSPACE}/${FIXTURE}" >> "$GITHUB_ENV"
+
+      - name: Read App Configuration
+        id: appconfig
+        uses: ./actions/app-config-read
+        with:
+          login: "false"
+          label: leasemate-marketing
+
+      - name: Assert applied keys
+        env:
+          GOT_COUNT: ${{ steps.appconfig.outputs.count }}
+        run: |
+          set -euo pipefail
+          if [ "$GOT_COUNT" != 4 ]; then
+            echo "::error::count ${GOT_COUNT} != 4"
+            exit 1
+          fi
+          if [ "${PUBLIC_LEAD_INTAKE_ENABLED}" != true ]; then
+            echo "::error::PUBLIC_LEAD_INTAKE_ENABLED=${PUBLIC_LEAD_INTAKE_ENABLED}, expected true (label override)"
+            exit 1
+          fi
+          if [ "${PUBLIC_SITE_NAME}" != LeaseMate ]; then
+            echo "::error::PUBLIC_SITE_NAME=${PUBLIC_SITE_NAME}, expected LeaseMate"
+            exit 1
+          fi
+          if [ "${NEXT_PUBLIC_APP_URL}" != "https://leasemate.example.test" ]; then
+            echo "::error::NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}"
+            exit 1
+          fi
+          expected=$'line one\nline two'
+          if [ "${PUBLIC_FOOTER}" != "$expected" ]; then
+            echo "::error::PUBLIC_FOOTER multiline mismatch"
+            exit 1
+          fi
+          echo "OK app-config-read applied ${GOT_COUNT} keys"
+
+  # Negative cases at step level so the job stays green.
+  app-config-read-fail:
+    name: app-config-read-fail
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install az stub
+        run: |
+          set -euo pipefail
+          stub_dir="${RUNNER_TEMP}/app-config-az-stub"
+          mkdir -p "$stub_dir"
+          cp tests/fixtures/app-config/az-stub.sh "${stub_dir}/az"
+          chmod +x "${stub_dir}/az"
+          echo "$stub_dir" >> "$GITHUB_PATH"
+
+      - name: Key Vault reference must fail
+        id: kv-ref
+        continue-on-error: true
+        env:
+          APP_CONFIG_FIXTURE: ${{ github.workspace }}/tests/fixtures/app-config/keyvault-ref.json
+        uses: ./actions/app-config-read
+        with:
+          login: "false"
+          label: leasemate-marketing
+
+      - name: Bad key name must fail
+        id: bad-key
+        continue-on-error: true
+        env:
+          APP_CONFIG_FIXTURE: ${{ github.workspace }}/tests/fixtures/app-config/bad-key.json
+        uses: ./actions/app-config-read
+        with:
+          login: "false"
+          label: leasemate-marketing
+
+      - name: Key Vault reference value is not printed
+        env:
+          GITHUB_ENV: ${{ runner.temp }}/kv.env
+          GITHUB_STEP_SUMMARY: ${{ runner.temp }}/kv.summary
+          GITHUB_OUTPUT: ${{ runner.temp }}/kv.output
+          APP_CONFIG_KEY_PREFIXES: PUBLIC_,NEXT_PUBLIC_
+          APP_CONFIG_LABEL: leasemate-marketing
+        run: |
+          set -euo pipefail
+          : >"${GITHUB_ENV}"
+          : >"${GITHUB_STEP_SUMMARY}"
+          : >"${GITHUB_OUTPUT}"
+          set +e
+          out="$(node scripts/app-config-apply.mjs < tests/fixtures/app-config/keyvault-ref.json 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::keyvault-ref unexpectedly passed"
+            exit 1
+          fi
+          case "${out}" in
+            *should-not-appear*|*"leaked"*)
+              echo "::error::Key Vault reference value leaked in output"
+              exit 1
+              ;;
+          esac
+          if grep -F 'should-not-appear' "${GITHUB_ENV}" "${GITHUB_STEP_SUMMARY}" "${GITHUB_OUTPUT}" >/dev/null 2>&1; then
+            echo "::error::Key Vault reference value leaked to env/summary/output"
+            exit 1
+          fi
+          echo "OK keyvault-ref failed without leaking value"
+
+      - name: Assert failure steps failed
+        env:
+          KV_REF: ${{ steps.kv-ref.outcome }}
+          BAD_KEY: ${{ steps.bad-key.outcome }}
+        run: |
+          set -euo pipefail
+          failed=0
+          if [ "$KV_REF" != failure ]; then
+            echo "::error::kv-ref outcome is ${KV_REF}, expected failure"
+            failed=1
+          else
+            echo "OK keyvault-ref failed"
+          fi
+          if [ "$BAD_KEY" != failure ]; then
+            echo "::error::bad-key outcome is ${BAD_KEY}, expected failure"
+            failed=1
+          else
+            echo "OK bad-key failed"
+          fi
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
   self-test:
     name: self-test
     if: always()
@@ -794,6 +973,8 @@ jobs:
         security-scan-gitleaks-runtime,
         npm-publish-ok,
         npm-publish-fail,
+        app-config-read,
+        app-config-read-fail,
       ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -815,10 +996,12 @@ jobs:
           SCAN_GITLEAKS: ${{ needs.security-scan-gitleaks-runtime.result }}
           NPM_OK: ${{ needs.npm-publish-ok.result }}
           NPM_FAIL: ${{ needs.npm-publish-fail.result }}
+          APPCONFIG_OK: ${{ needs.app-config-read.result }}
+          APPCONFIG_FAIL: ${{ needs.app-config-read-fail.result }}
         run: |
           set -euo pipefail
           failed=0
-          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-fail:${SCAN_FAIL}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}" "npm-publish-ok:${NPM_OK}" "npm-publish-fail:${NPM_FAIL}"; do
+          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-fail:${SCAN_FAIL}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}" "npm-publish-ok:${NPM_OK}" "npm-publish-fail:${NPM_FAIL}" "app-config-read:${APPCONFIG_OK}" "app-config-read-fail:${APPCONFIG_FAIL}"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             if [ "$result" != success ]; then
