@@ -1,0 +1,204 @@
+# One pnpm and Node policy. No version override.
+# pnpm/action-setup v6.1.1 (commit 73e46992e05b19abd31f2f3c20e0e7370d762115)
+# actions/setup-node v7.1.0 (commit 949feb2413d6458794dcd2491c4babbbce0c15c1)
+name: Set up pnpm and Node
+description: >-
+  Install pnpm from package.json#packageManager and Node from .nvmrc (or the
+  docs/versions.md default). No version override.
+inputs:
+  working_directory:
+    description: >-
+      string (optional). Package directory relative to the repository root.
+    required: false
+    default: "."
+  cache:
+    description: >-
+      string (optional). When true, enable the pnpm store cache through
+      actions/setup-node. There is no way to override the pnpm or Node version.
+    required: false
+    default: "true"
+  node_version_file:
+    description: >-
+      string (optional). Node version file relative to working_directory. Used
+      when the file exists; otherwise the default Node major from
+      docs/versions.md.
+    required: false
+    default: ".nvmrc"
+  version:
+    description: >-
+      Forbidden. Do not set. pnpm comes from package.json#packageManager and
+      Node comes from .nvmrc (or the docs/versions.md default).
+    required: false
+    default: ""
+outputs:
+  pnpm-version:
+    description: pnpm version resolved from package.json packageManager
+    value: ${{ steps.guard.outputs.pnpm-version }}
+  node-version:
+    description: Installed Node.js version
+    value: ${{ steps.record-node.outputs.node-version }}
+  node-source:
+    description: nvmrc when the version file exists, otherwise default
+    value: ${{ steps.resolve.outputs.node-source }}
+
+runs:
+  using: composite
+  steps:
+    - name: Reject version override
+      shell: bash
+      env:
+        FORBIDDEN_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ -n "${FORBIDDEN_VERSION}" ]; then
+          echo "::error::Do not pass a version input. pnpm comes from package.json#packageManager and Node comes from .nvmrc (or the docs/versions.md default)."
+          exit 1
+        fi
+
+    - name: Guard packageManager
+      id: guard
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        REPO_ROOT="$(cd "${GITHUB_ACTION_PATH}/../.." && pwd)"
+        bash "${REPO_ROOT}/scripts/setup-pnpm-node-guard.sh"
+
+    - name: Resolve Node version source
+      id: resolve
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        NODE_VERSION_FILE: ${{ inputs.node_version_file }}
+      run: |
+        set -euo pipefail
+        workdir="${WORKING_DIRECTORY:-.}"
+        workdir="${workdir%/}"
+        if [ -z "$workdir" ]; then
+          workdir="."
+        fi
+        nvmrc_name="${NODE_VERSION_FILE:-.nvmrc}"
+        nvmrc_path="${workdir}/${nvmrc_name}"
+        package_json="${workdir}/package.json"
+        lockfile="${workdir}/pnpm-lock.yaml"
+        action_root="$(cd "${GITHUB_ACTION_PATH}" && pwd)"
+        repo_root="$(cd "${action_root}/../.." && pwd)"
+        versions="${repo_root}/docs/versions.md"
+
+        if [ -f "$nvmrc_path" ]; then
+          node_source="nvmrc"
+          node_version="$(tr -d ' \t\r\n' < "$nvmrc_path")"
+          if [ -z "$node_version" ]; then
+            echo "::error::${nvmrc_path} is empty."
+            exit 1
+          fi
+          echo "node-source=${node_source}" >> "$GITHUB_OUTPUT"
+          echo "node-version=${node_version}" >> "$GITHUB_OUTPUT"
+          echo "node-version-file=${nvmrc_path}" >> "$GITHUB_OUTPUT"
+        else
+          if [ ! -f "$versions" ]; then
+            echo "::error::docs/versions.md is missing; cannot resolve the default Node major."
+            exit 1
+          fi
+          matches="$(grep -E '^default-node:[[:space:]]*[0-9]+[[:space:]]*$' "$versions" || true)"
+          count="$(printf '%s\n' "$matches" | grep -c '[^[:space:]]' || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::docs/versions.md must contain exactly one 'default-node: <major>' line."
+            exit 1
+          fi
+          node_source="default"
+          node_version="$(printf '%s\n' "$matches" | awk '{print $2}')"
+          echo "node-source=${node_source}" >> "$GITHUB_OUTPUT"
+          echo "node-version=${node_version}" >> "$GITHUB_OUTPUT"
+          echo "node-version-file=" >> "$GITHUB_OUTPUT"
+        fi
+        echo "package-json=${package_json}" >> "$GITHUB_OUTPUT"
+        echo "lockfile=${lockfile}" >> "$GITHUB_OUTPUT"
+        echo "Resolved Node source: ${node_source}"
+        echo "Resolved Node version spec: ${node_version}"
+
+    - name: Set up pnpm
+      uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      with:
+        package_json_file: ${{ steps.resolve.outputs.package-json }}
+        run_install: false
+
+    - name: Set up Node.js from version file (cache)
+      if: ${{ steps.resolve.outputs.node-source == 'nvmrc' && inputs.cache == 'true' }}
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: ${{ steps.resolve.outputs.node-version-file }}
+        cache: pnpm
+        cache-dependency-path: ${{ steps.resolve.outputs.lockfile }}
+
+    - name: Set up Node.js from version file
+      if: ${{ steps.resolve.outputs.node-source == 'nvmrc' && inputs.cache != 'true' }}
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: ${{ steps.resolve.outputs.node-version-file }}
+
+    - name: Set up Node.js from docs default (cache)
+      if: ${{ steps.resolve.outputs.node-source == 'default' && inputs.cache == 'true' }}
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ steps.resolve.outputs.node-version }}
+        cache: pnpm
+        cache-dependency-path: ${{ steps.resolve.outputs.lockfile }}
+
+    - name: Set up Node.js from docs default
+      if: ${{ steps.resolve.outputs.node-source == 'default' && inputs.cache != 'true' }}
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ steps.resolve.outputs.node-version }}
+
+    - name: Record resolved Node version
+      id: record-node
+      shell: bash
+      run: |
+        set -euo pipefail
+        ver="$(node -v)"
+        ver="${ver#v}"
+        echo "node-version=${ver}" >> "$GITHUB_OUTPUT"
+        echo "Resolved Node version: ${ver}"
+        echo "Resolved pnpm version (runtime): $(pnpm --version)"
+
+    - name: Write job summary
+      shell: bash
+      env:
+        PNPM_VERSION: ${{ steps.guard.outputs.pnpm-version }}
+        NODE_VERSION: ${{ steps.record-node.outputs.node-version }}
+        NODE_SOURCE: ${{ steps.resolve.outputs.node-source }}
+        NODE_VERSION_FILE: ${{ inputs.node_version_file }}
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_PATH: ${{ github.action_path }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        HEAD_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        if [ -z "${GITHUB_STEP_SUMMARY:-}" ]; then
+          echo "::error::GITHUB_STEP_SUMMARY is not set."
+          exit 1
+        fi
+        if [ "${NODE_SOURCE}" = "default" ]; then
+          source_label="default (docs/versions.md)"
+        else
+          source_label="${NODE_VERSION_FILE}"
+        fi
+        action_ref="${ACTION_REF:-}"
+        if [ -z "$action_ref" ]; then
+          action_ref_display="(empty; local path, see action_path)"
+        else
+          action_ref_display="$action_ref"
+        fi
+        {
+          echo "## setup-pnpm-node"
+          echo
+          echo "- pnpm: \`${PNPM_VERSION}\`"
+          echo "- node: \`${NODE_VERSION}\` (source: \`${source_label}\`)"
+          echo "- action_ref: \`${action_ref_display}\`"
+          echo "- action_path: \`${ACTION_PATH}\`"
+          echo "- workflow_ref: \`${WORKFLOW_REF}\`"
+          echo "- sha: \`${HEAD_SHA}\`"
+          echo
+        } >> "$GITHUB_STEP_SUMMARY"

@@ -65,7 +65,9 @@ jobs:
         run: |
           set -euo pipefail
           gh extension install github/gh-actions-lock --pin v0.5.1
-          gh actions-lock --verify-local
+          # actionlint 1.7.12 rejects uses: $/. Nested pins of the local
+          # composite are recorded on self-test.yml via if: false steps.
+          gh actions-lock --verify-local --ignore-local-actions
 
       - name: Lint reusable workflow contract
         run: node scripts/lint-contract.mjs
@@ -90,6 +92,9 @@ jobs:
 
       - name: Test release workflow policy
         run: bash scripts/check-release-workflow-policy.test.sh
+
+      - name: Test setup-pnpm-node guard
+        run: bash scripts/setup-pnpm-node-guard.test.sh
 
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@1b4550e929643b8b26a62303c6bd64814271a4f1 # v0.9.2
