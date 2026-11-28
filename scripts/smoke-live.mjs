@@ -98,9 +98,16 @@ function extractTitle(html) {
 }
 
 function htmlAttr(tag, name) {
-  const quoted = tag.match(new RegExp(`\\b${name}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, "i"));
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // (?<![A-Za-z0-9:_-]) is an attribute-name boundary so `src` does not match
+  // inside `data-src` (`\\b` is not enough: `-` is a non-word character).
+  const quoted = tag.match(
+    new RegExp(`(?<![A-Za-z0-9:_-])${escaped}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, "i"),
+  );
   if (quoted) return quoted[2];
-  const unquoted = tag.match(new RegExp(`\\b${name}\\s*=\\s*([^\\s"'=<>\`]+)`, "i"));
+  const unquoted = tag.match(
+    new RegExp(`(?<![A-Za-z0-9:_-])${escaped}\\s*=\\s*([^\\s"'=<>\`]+)`, "i"),
+  );
   return unquoted ? unquoted[1] : "";
 }
 

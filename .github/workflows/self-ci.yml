@@ -75,3 +75,6 @@ jobs:
 
       - name: Test Turnstile policy guard
         run: bash scripts/check-turnstile-policy.test.sh
+
+      - name: Test working_directory path joins
+        run: bash scripts/check-workflow-paths.test.sh
