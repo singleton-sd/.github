@@ -1,0 +1,308 @@
+# Cut an annotated v1.x.y tag after self-ci and self-test pass on main, then
+# move the floating annotated v1 tag. Callers pin @v1 (floating) or @v1.x.y
+# (immutable). Never runs on pull_request. Tags are pushed with the
+# singleton-release App token, never GITHUB_TOKEN.
+# Naming: ADR-011 (Singleton SD reusable workflow naming).
+name: release
+
+on:
+  workflow_run:
+    workflows: [self-ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: >-
+          Commit SHA to tag. Must be on main with green self-ci and self-test.
+          Defaults to main HEAD.
+        required: false
+        type: string
+
+concurrency:
+  group: release-v1
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  release:
+    name: release
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.event == 'push'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve target SHA
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sha || '' }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            if [ "$REF" != refs/heads/main ]; then
+              echo "::error::workflow_dispatch is restricted to main (got ${REF})."
+              exit 1
+            fi
+            if [ -n "${DISPATCH_SHA:-}" ]; then
+              sha="$(gh api "repos/${REPO}/commits/${DISPATCH_SHA}" --jq .sha)"
+            else
+              sha="$(gh api "repos/${REPO}/commits/main" --jq .sha)"
+            fi
+          elif [ "$EVENT_NAME" = workflow_run ]; then
+            if [ "${RUN_HEAD_BRANCH}" != main ]; then
+              echo "::error::Refusing to release from workflow_run branch '${RUN_HEAD_BRANCH}'."
+              exit 1
+            fi
+            if [ "${RUN_EVENT}" != push ]; then
+              echo "::error::Refusing to release from workflow_run event '${RUN_EVENT}' (want push)."
+              exit 1
+            fi
+            sha="${RUN_HEAD_SHA}"
+          else
+            echo "::error::Unsupported event '${EVENT_NAME}'."
+            exit 1
+          fi
+          cmp="$(gh api "repos/${REPO}/compare/${sha}...main")"
+          status="$(printf '%s' "$cmp" | jq -r .status)"
+          behind="$(printf '%s' "$cmp" | jq -r .behind_by)"
+          if [ "$status" = identical ]; then
+            :
+          elif [ "$status" = ahead ] && [ "$behind" = 0 ]; then
+            :
+          else
+            echo "::error::SHA ${sha} is not on main (compare ${sha}...main status=${status} behind_by=${behind})."
+            exit 1
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "Target SHA ${sha}"
+
+      - name: Verify self-ci and self-test
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.target.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          runs="$(gh api "repos/${REPO}/commits/${SHA}/check-runs?filter=latest&per_page=100")"
+          missing=0
+          for name in self-ci self-test; do
+            row="$(printf '%s' "$runs" | jq -r --arg n "$name" '
+              [.check_runs[] | select(.name == $n and .app.slug == "github-actions")] | first
+              | if . == null then "missing\t\t" else "\(.status)\t\(.conclusion)" end
+            ')"
+            IFS=$'\t' read -r status conclusion <<<"$row"
+            if [ "$status" = missing ] || [ -z "$status" ]; then
+              echo "::error::Refusing to tag ${SHA}: required check '${name}' was not found."
+              missing=1
+              continue
+            fi
+            if [ "$status" != completed ] || [ "$conclusion" != success ]; then
+              echo "::error::Refusing to tag ${SHA}: required check '${name}' is ${status}/${conclusion}."
+              missing=1
+            else
+              echo "OK ${name} completed/success"
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Plan version
+        id: plan
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.target.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tags=""
+          commit_tags=""
+          if ! tag_tsv="$(gh api --paginate "repos/${REPO}/tags?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv')"; then
+            echo "::error::Failed to list tags for ${REPO}; refusing to plan a release."
+            exit 1
+          fi
+          while IFS=$'\t' read -r name commit_sha || [ -n "${name:-}" ]; do
+            [ -z "${name:-}" ] && continue
+            tags="${tags}${name}"$'\n'
+            if [ "$commit_sha" = "$SHA" ]; then
+              commit_tags="${commit_tags}${name}"$'\n'
+            fi
+          done <<< "$tag_tsv"
+          if ! labels="$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '[.[].labels[].name] | unique | join(" ")')"; then
+            echo "::error::Failed to read pull request labels for ${SHA}."
+            exit 1
+          fi
+          echo "Existing tags:"
+          printf '%s' "$tags" | sed '/^$/d' || true
+          echo "Labels: ${labels:-none}"
+          result="$(TAGS="$tags" LABELS="$labels" COMMIT_TAGS="$commit_tags" bash scripts/next-release-tag.sh)"
+          status="${result%% *}"
+          tag="${result#* }"
+          echo "Plan: ${result}"
+          v1_sha=""
+          if v1_sha="$(gh api "repos/${REPO}/commits/v1" --jq .sha 2>/dev/null)"; then
+            echo "Current v1 -> ${v1_sha}"
+          else
+            v1_sha=""
+            echo "v1 tag is absent"
+          fi
+          need_version=false
+          need_v1=false
+          v1_note="no (already at this commit)"
+          if [ "$status" = create ]; then
+            need_version=true
+          fi
+          if [ -z "$v1_sha" ]; then
+            need_v1=true
+          elif [ "$v1_sha" != "$SHA" ]; then
+            cmp_v1="$(gh api "repos/${REPO}/compare/${SHA}...${v1_sha}")"
+            v1_status="$(printf '%s' "$cmp_v1" | jq -r .status)"
+            v1_behind="$(printf '%s' "$cmp_v1" | jq -r .behind_by)"
+            if [ "$v1_status" = ahead ] && [ "$v1_behind" = 0 ]; then
+              echo "Skipping v1 move: ${SHA} is an ancestor of current v1 ${v1_sha}"
+              v1_note="no (target is an ancestor of current v1; not moving backward)"
+            else
+              need_v1=true
+            fi
+          fi
+          {
+            echo "status=${status}"
+            echo "tag=${tag}"
+            echo "v1_before=${v1_sha}"
+            echo "v1_note=${v1_note}"
+            echo "need_version=${need_version}"
+            echo "need_v1=${need_v1}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint GitHub App token
+        id: app-token
+        if: steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Cut version tag and move v1
+        id: cut
+        if: steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true'
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.target.outputs.sha }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          NEED_VERSION: ${{ steps.plan.outputs.need_version }}
+          NEED_V1: ${{ steps.plan.outputs.need_v1 }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          created="already on this commit"
+          v1_moved="no (already at this commit)"
+
+          post_tag_object() {
+            local name="$1" message="$2"
+            jq -n --arg tag "$name" --arg message "$message" --arg object "$SHA" \
+              '{tag:$tag, message:$message, object:$object, type:"commit"}' \
+              | gh api "repos/${REPO}/git/tags" --method POST --input - --jq .sha
+          }
+
+          report_tag_error() {
+            local ref="$1" err="$2"
+            echo "::error::Failed to update ${ref}. Exact error:"
+            printf '%s\n' "$err"
+            echo "::error::If a ruleset blocked the singleton-release App, leave the ruleset unchanged and grant the App access."
+            exit 1
+          }
+
+          if [ "$NEED_VERSION" = true ]; then
+            if gh api "repos/${REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+              echo "::error::Ref refs/tags/${TAG} already exists; refusing to overwrite a version tag."
+              exit 1
+            fi
+            if ! tag_object_sha="$(post_tag_object "$TAG" "Release ${TAG}")"; then
+              report_tag_error "git/tags ${TAG}" "create-tag-object failed"
+            fi
+            if ! err="$(jq -n --arg ref "refs/tags/${TAG}" --arg sha "$tag_object_sha" \
+              '{ref:$ref, sha:$sha}' \
+              | gh api "repos/${REPO}/git/refs" --method POST --input - 2>&1)"; then
+              report_tag_error "refs/tags/${TAG}" "$err"
+            fi
+            created="created"
+            echo "Created annotated ${TAG} at ${SHA}"
+          fi
+
+          if [ "$NEED_V1" = true ]; then
+            if ! v1_object_sha="$(post_tag_object v1 "Floating v1 -> ${TAG}")"; then
+              report_tag_error "git/tags v1" "create-tag-object failed"
+            fi
+            if gh api "repos/${REPO}/git/ref/tags/v1" >/dev/null 2>&1; then
+              if ! err="$(jq -n --arg sha "$v1_object_sha" '{sha:$sha, force:true}' \
+                | gh api "repos/${REPO}/git/refs/tags/v1" --method PATCH --input - 2>&1)"; then
+                report_tag_error "refs/tags/v1" "$err"
+              fi
+              v1_moved="yes (force-updated annotated v1)"
+            else
+              if ! err="$(jq -n --arg ref "refs/tags/v1" --arg sha "$v1_object_sha" \
+                '{ref:$ref, sha:$sha}' \
+                | gh api "repos/${REPO}/git/refs" --method POST --input - 2>&1)"; then
+                report_tag_error "refs/tags/v1" "$err"
+              fi
+              v1_moved="yes (created annotated v1)"
+            fi
+            echo "v1 -> ${SHA} (${TAG})"
+          fi
+
+          {
+            echo "created=${created}"
+            echo "v1_moved=${v1_moved}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write job summary
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          CREATED: ${{ steps.cut.outputs.created }}
+          V1_MOVED: ${{ steps.cut.outputs.v1_moved }}
+          V1_NOTE: ${{ steps.plan.outputs.v1_note }}
+          NEED_VERSION: ${{ steps.plan.outputs.need_version }}
+          NEED_V1: ${{ steps.plan.outputs.need_v1 }}
+        run: |
+          set -euo pipefail
+          created="${CREATED:-already on this commit}"
+          v1_moved="${V1_MOVED:-${V1_NOTE:-no (already at this commit)}}"
+          if [ "${NEED_VERSION}" != true ]; then
+            created="already on this commit"
+          fi
+          if [ "${NEED_V1}" != true ]; then
+            v1_moved="${V1_NOTE:-no (already at this commit)}"
+          fi
+          {
+            echo "## Release"
+            echo "- version tag: \`${TAG}\` (${created})"
+            echo "- sha: \`${SHA}\`"
+            echo "- v1 moved: ${v1_moved}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

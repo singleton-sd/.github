@@ -40,6 +40,9 @@ jobs:
       - name: Check Azure OIDC policy
         run: bash scripts/check-azure-oidc-policy.sh
 
+      - name: Check release workflow policy
+        run: bash scripts/check-release-workflow-policy.sh
+
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -90,3 +93,9 @@ jobs:
 
       - name: Test Azure OIDC policy guard
         run: bash scripts/check-azure-oidc-policy.test.sh
+
+      - name: Test next-release-tag
+        run: bash scripts/next-release-tag.test.sh
+
+      - name: Test release workflow policy
+        run: bash scripts/check-release-workflow-policy.test.sh
