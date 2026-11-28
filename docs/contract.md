@@ -18,7 +18,10 @@ uses the local `./.github/workflows/<file>.yml` path.
   `secrets: inherit` is forbidden. This repository stores no secrets; callers
   pass them through the `secrets:` map.
 - **Permissions.** Workflows set `permissions: {}` at the top level and grant
-  the minimum per job. Do not use `read-all` or `write-all`.
+  the minimum per job. Do not use `read-all` or `write-all`. GitHub validates
+  nested-job permissions at parse time, so `pages-build.yml` must not request
+  `id-token: write` (App Configuration builds use `pages-build-app-config.yml`).
+  Org starters that call `pages-build.yml` must not grant `id-token: write`.
 - **Third-party actions.** Pin every third-party `uses:` to a full 40-character
   commit SHA with a `# vX.Y.Z` comment. Record the same pin in
   [`.github/workflows/actions.lock`](../.github/workflows/actions.lock).
@@ -34,7 +37,16 @@ uses the local `./.github/workflows/<file>.yml` path.
   ```
 
   Local `./` references and this repository's own `self-*` workflows are
-  expected.
+  expected. `./actions/...` inside a called reusable workflow or composite
+  resolves against the **caller** workspace. Reusable workflows that need
+  this repository's composites check out `${{ job.workflow_repository }}` at
+  `${{ job.workflow_sha }}` into `.github-workflows-src` (see `pages-smoke.yml`).
+  Nested login from `actions/app-config-read` is SHA-pinned
+  `singleton-sd/.github/actions/azure-oidc-login@<sha>`. GitHub's native
+  lockfile keys that as `singleton-sd/.github@<sha>` (not the action path)
+  and looks that pin up on the **calling workflow** list, so
+  `self-test.yml`, `config-read.yml`, and `pages-build-app-config.yml`
+  record it with a never-run (`github.run_attempt == 0`) step.
 
   Pins used only inside `actions/*/action.yml` (today `azure/login` in
   `actions/azure-oidc-login`) are recorded in `actions.lock` by

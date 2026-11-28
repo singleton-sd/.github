@@ -1,0 +1,109 @@
+# Reusable App Configuration read. Callers pin @v1, never @main.
+# Thin wrapper around actions/app-config-read. Values are job outputs plus
+# GITHUB_ENV inside this job. Callers that need env in the same job should
+# call the composite directly.
+name: Config read
+
+on:
+  workflow_call:
+    inputs:
+      endpoint:
+        description: Azure App Configuration data-plane endpoint
+        type: string
+        default: "https://ssd-global-appcs-build-prod-ae.azconfig.io"
+      label:
+        description: >-
+          Repo-specific App Configuration label. Empty uses the caller
+          repository name.
+        type: string
+        default: ""
+      key_prefixes:
+        description: Comma-separated key prefixes to export
+        type: string
+        default: "PUBLIC_,NEXT_PUBLIC_"
+      client_id:
+        description: Entra application (client) ID. Not a secret.
+        type: string
+        default: "4764ad98-0805-485d-8167-123cb7e90f63"
+      tenant_id:
+        description: Entra tenant ID. Not a secret.
+        type: string
+        default: "9a0e57d7-e58e-4e8b-814d-037cd7d9015c"
+      subscription_id:
+        description: Azure subscription ID. Not a secret.
+        type: string
+        default: "01c0bb8b-3770-4765-979a-cb13ae7e3dd2"
+      login:
+        description: >-
+          When true, sign in with actions/azure-oidc-login. When false, the
+          caller already signed in.
+        type: boolean
+        default: true
+    outputs:
+      count:
+        description: Number of keys applied
+        value: ${{ jobs.read.outputs.count }}
+      applied:
+        description: JSON object of applied keys and values
+        value: ${{ jobs.read.outputs.applied }}
+
+permissions: {}
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      count: ${{ steps.appconfig.outputs.count }}
+      applied: ${{ steps.appconfig.outputs.applied }}
+    steps:
+      # Local ./actions paths resolve against the caller's workspace. Check
+      # out this reusable workflow's own repo and SHA (same as pages-smoke).
+      - name: Check out shared action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+          path: .github-workflows-src
+
+      # Never runs. Records the nested azure-oidc-login SHA so this
+      # workflow's actions.lock list includes singleton-sd/.github@sha.
+      - name: Lock nested azure-oidc-login pin
+        if: ${{ github.run_attempt == 0 }}
+        uses: singleton-sd/.github/actions/azure-oidc-login@0e40c2d9fb4139c8715aeae28de50a417e7b72df # v1.0.6
+        with:
+          client-id: 00000000-0000-0000-0000-000000000000
+          tenant-id: 00000000-0000-0000-0000-000000000000
+          subscription-id: 00000000-0000-0000-0000-000000000000
+
+      - name: Read App Configuration
+        id: appconfig
+        uses: ./.github-workflows-src/actions/app-config-read # zizmor: ignore[self-repository]
+        with:
+          endpoint: ${{ inputs.endpoint }}
+          label: ${{ inputs.label }}
+          key_prefixes: ${{ inputs.key_prefixes }}
+          client_id: ${{ inputs.client_id }}
+          tenant_id: ${{ inputs.tenant_id }}
+          subscription_id: ${{ inputs.subscription_id }}
+          login: ${{ inputs.login }}
+
+      - name: Write job summary
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          HEAD_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          COUNT: ${{ steps.appconfig.outputs.count }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Config read"
+            echo "- keys applied: \`${COUNT:-0}\`"
+            echo "- workflow_ref: \`${WORKFLOW_REF}\`"
+            echo "- sha: \`${HEAD_SHA}\`"
+            echo "- workflow_sha: \`${WORKFLOW_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -10,3 +10,11 @@ paths:
     ignore:
       - 'property "workflow_repository" is not defined'
       - 'property "workflow_sha" is not defined'
+  .github/workflows/config-read.yml:
+    ignore:
+      - 'property "workflow_repository" is not defined'
+      - 'property "workflow_sha" is not defined'
+  .github/workflows/pages-build-app-config.yml:
+    ignore:
+      - 'property "workflow_repository" is not defined'
+      - 'property "workflow_sha" is not defined'

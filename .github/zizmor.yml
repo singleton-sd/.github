@@ -11,3 +11,9 @@ rules:
     ignore:
       # Contract: only self-test.yml uses the local ./ path; callers pin @v1.
       - self-test.yml
+      # Nested login cannot use ./ (caller workspace). SHA-pin this repo's
+      # already-released azure-oidc-login instead.
+      - actions/app-config-read/action.yml
+      # Side-path checkout of this repo's composites (caller workspace).
+      - .github/workflows/config-read.yml
+      - .github/workflows/pages-build-app-config.yml

@@ -7,8 +7,9 @@ Do not change consumer repositories from here.
 
 A new reusable workflow or composite action belongs in its area under
 `docs/<area>.md`. Reserved areas stay stubs until **two callers** exist.
-Do not add `config`, `lib`, `app`, `deploy` (beyond Pages), `db`, or `infra`
-workflows until that bar is met.
+Do not add `lib`, `app`, `deploy` (beyond Pages), `db`, or `infra`
+workflows until that bar is met. Config reads use
+[`actions/app-config-read`](../actions/app-config-read/README.md).
 
 ## Contract
 

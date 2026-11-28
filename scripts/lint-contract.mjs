@@ -283,7 +283,14 @@ export function lockKeyForPin(pin) {
   if (!match) {
     return pin.uses.toLowerCase();
   }
-  return `${match[1].toLowerCase()}@${match[2].toLowerCase()}`;
+  const name = match[1];
+  const sha = match[2].toLowerCase();
+  // GitHub's native lockfile keys same-repo composites as owner/repo@sha,
+  // not owner/repo/actions/<name>@sha. A path-form key is Invalid lockfile.
+  if (/^singleton-sd\/\.github\/actions\//i.test(name)) {
+    return `singleton-sd/.github@${sha}`;
+  }
+  return `${name.toLowerCase()}@${sha}`;
 }
 
 function isCompositeActionRel(rel) {
@@ -303,8 +310,16 @@ export function compositePinMismatchMessage(rel, action, actionSha, lockSha) {
   return `${rel}: ${action} pin ${actionSha} does not match ${LOCK_REL} ${lockSha}`;
 }
 
+function lockKeyPrefixForAction(actionName) {
+  const name = String(actionName).toLowerCase();
+  if (/^singleton-sd\/\.github\/actions\//i.test(name)) {
+    return "singleton-sd/.github@";
+  }
+  return `${name}@`;
+}
+
 function lockDependenciesForAction(dependencies, actionName) {
-  const prefix = `${String(actionName).toLowerCase()}@`;
+  const prefix = lockKeyPrefixForAction(actionName);
   const found = [];
   if (!dependencies || typeof dependencies !== "object") {
     return found;
@@ -632,6 +647,127 @@ function lintCompositeAction(rel, raw, loaded, errors) {
   }
 }
 
+function jobRequestsIdTokenWrite(job) {
+  const perms = job && job.permissions;
+  if (!perms || typeof perms !== "object" || Array.isArray(perms)) {
+    return false;
+  }
+  return perms["id-token"] === "write";
+}
+
+function usesPagesBuildReusable(uses) {
+  if (typeof uses !== "string") {
+    return false;
+  }
+  return uses.includes(".github/workflows/pages-build.yml@");
+}
+
+const NESTED_AZURE_OIDC_PIN =
+  /singleton-sd\/\.github\/actions\/azure-oidc-login@[0-9a-fA-F]{40}/;
+
+export function lintAppConfigNestedLoginLock(root, errors) {
+  const files = [
+    ".github/workflows/self-test.yml",
+    ".github/workflows/config-read.yml",
+    ".github/workflows/pages-build-app-config.yml",
+  ];
+  for (const rel of files) {
+    const path = join(root, rel);
+    if (!existsSync(path)) {
+      continue;
+    }
+    const raw = readFileSync(path, "utf8");
+    if (!raw.includes("actions/app-config-read")) {
+      continue;
+    }
+    if (!NESTED_AZURE_OIDC_PIN.test(raw)) {
+      errors.push(
+        `${rel}: must SHA-pin nested azure-oidc-login so actions.lock lists singleton-sd/.github@sha for this workflow`,
+      );
+    }
+  }
+}
+
+export function lintPagesBuildIdTokenContract(root, errors) {
+  const pagesBuildPath = join(root, ".github", "workflows", "pages-build.yml");
+  const appConfigPath = join(root, ".github", "workflows", "pages-build-app-config.yml");
+  if (!existsSync(pagesBuildPath) || !existsSync(appConfigPath)) {
+    return;
+  }
+
+  const pagesRel = ".github/workflows/pages-build.yml";
+  const appRel = ".github/workflows/pages-build-app-config.yml";
+  const pagesRaw = readFileSync(pagesBuildPath, "utf8");
+  let pagesBuild;
+  let appConfig;
+  try {
+    pagesBuild = loadYaml(pagesRaw);
+    appConfig = loadYaml(readFileSync(appConfigPath, "utf8"));
+  } catch {
+    return;
+  }
+
+  const pagesJobs = pagesBuild && pagesBuild.jobs;
+  if (pagesJobs && typeof pagesJobs === "object") {
+    for (const [id, job] of Object.entries(pagesJobs)) {
+      if (jobRequestsIdTokenWrite(job)) {
+        errors.push(
+          `${pagesRel}: job '${id}' must not request id-token: write (GitHub validates nested-job permissions at parse time; App Configuration builds use pages-build-app-config.yml)`,
+        );
+      }
+    }
+  }
+  if (!pagesRaw.includes("pages-build-app-config.yml")) {
+    errors.push(
+      `${pagesRel}: must fail-fast app_config callers to pages-build-app-config.yml`,
+    );
+  }
+
+  const appJobs = appConfig && appConfig.jobs;
+  let appHasIdToken = false;
+  if (appJobs && typeof appJobs === "object") {
+    for (const job of Object.values(appJobs)) {
+      if (jobRequestsIdTokenWrite(job)) {
+        appHasIdToken = true;
+      }
+    }
+  }
+  if (!appHasIdToken) {
+    errors.push(`${appRel}: must request id-token: write on a job`);
+  }
+
+  const templatesDir = join(root, "workflow-templates");
+  if (!existsSync(templatesDir)) {
+    return;
+  }
+  for (const name of readdirSync(templatesDir)) {
+    if (!name.endsWith(".yml") && !name.endsWith(".yaml")) {
+      continue;
+    }
+    const rel = join("workflow-templates", name).replace(/\\/g, "/");
+    let loaded;
+    try {
+      loaded = loadYaml(readFileSync(join(templatesDir, name), "utf8"));
+    } catch {
+      continue;
+    }
+    const jobs = loaded && loaded.jobs;
+    if (!jobs || typeof jobs !== "object") {
+      continue;
+    }
+    for (const [id, job] of Object.entries(jobs)) {
+      if (!usesPagesBuildReusable(job && job.uses)) {
+        continue;
+      }
+      if (jobRequestsIdTokenWrite(job)) {
+        errors.push(
+          `${rel}: job '${id}' calls pages-build.yml and must not grant id-token: write`,
+        );
+      }
+    }
+  }
+}
+
 function lintSelfWorkflow(rel, loaded, errors) {
   if (!emptyPermissions(loaded.permissions)) {
     errors.push(`${rel}: self-* workflows must set top-level permissions: {}`);
@@ -693,6 +829,9 @@ export function lintRepo(root, options = {}) {
       lintSelfWorkflow(rel, loaded, errors);
     }
   }
+
+  lintPagesBuildIdTokenContract(root, errors);
+  lintAppConfigNestedLoginLock(root, errors);
 
   const collected = collectThirdPartyPins(root);
   errors.push(...collected.errors);

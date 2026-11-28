@@ -39,6 +39,7 @@ Releases are cut by [`.github/workflows/self-release.yml`](.github/workflows/sel
 | Area | Workflow or action | Purpose | Caller permissions | Secrets | Status | Known callers |
 | --- | --- | --- | --- | --- | --- | --- |
 | pages | [`pages-build.yml`](.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact | `contents: read` | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
+| pages | [`pages-build-app-config.yml`](.github/workflows/pages-build-app-config.yml) | Same as `pages-build.yml`, then read public prefixes from Azure App Configuration | `contents: read`, `id-token: write` | none | active | none yet |
 | pages | [`pages-deploy.yml`](.github/workflows/pages-deploy.yml) | Download artifact, rewrite `.nojekyll`, mint singleton-release App token, deploy production or preview (`dry_run` skips the push) | `contents: read`, `actions: read` | `RELEASE_APP_PRIVATE_KEY` (not required when `dry_run: true`) | active | org starters `pages-production.yml`, `pages-preview.yml` |
 | pages | [`pages-smoke.yml`](.github/workflows/pages-smoke.yml) | Live Pages smoke: HTTP 200, title/root needle, CSS/JS content-types | `contents: read` | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
 | self | [`self-ci.yml`](.github/workflows/self-ci.yml) | Required check `self-ci`: actionlint, shellcheck, policy tests, contract lint, zizmor | n/a (this repo) | none | active | this repository |
@@ -46,7 +47,8 @@ Releases are cut by [`.github/workflows/self-release.yml`](.github/workflows/sel
 | self | [`self-release.yml`](.github/workflows/self-release.yml) | After those checks pass on `main`, cut annotated `v1.x.y` and move floating `v1` | n/a (this repo) | `RELEASE_APP_PRIVATE_KEY` (this repo) | active | this repository |
 | security | [`security-scan.yml`](.github/workflows/security-scan.yml) | actionlint, zizmor, gitleaks, dependency review, caller contract | `contents: read`, `pull-requests: read` | none | active | none yet |
 | security | [`actions/azure-oidc-login`](actions/azure-oidc-login/README.md) | Azure login via GitHub OIDC; optional Key Vault read | `id-token: write`, `contents: read` | none (OIDC) | active | none in this repo |
-| config | — | Shared config reader | — | — | not built until two callers exist | — |
+| config | [`actions/app-config-read`](actions/app-config-read/README.md) | Read public App Configuration keys into `GITHUB_ENV` | `id-token: write`, `contents: read` | none (OIDC) | active | none yet |
+| config | [`config-read.yml`](.github/workflows/config-read.yml) | Thin `workflow_call` wrapper; job outputs `count` and `applied` | `id-token: write`, `contents: read` | none (OIDC) | active | none yet |
 | release | — | Shared consumer release-version workflow | — | — | not built until two callers exist | — |
 | lib | [`actions/npm-publish`](actions/npm-publish/README.md) | Pack one tarball and `npm publish` with provenance inside the kit's existing `release.yml` job | `id-token: write` | none (OIDC) | active | none yet |
 | lib | — | Shared lib verify/publish (`lib-publish.yml`, GitHub Packages) | — | — | not built until two callers exist | — |
@@ -78,7 +80,10 @@ runner.
 
 No secrets. Reads `vars.PUBLIC_LEAD_INTAKE_ENABLED`,
 `vars.PUBLIC_TURNSTILE_SITE_KEY`, and `vars.PUBLIC_LEADS_API_URL` from the
-caller unless overridden.
+caller unless overridden. Callers grant `contents: read` only. GitHub
+validates nested-job permissions at parse time, so this workflow never
+requests `id-token: write`. `app_config: true` fails fast and points at
+`pages-build-app-config.yml`.
 
 | Input | Default | Notes |
 | --- | --- | --- |
@@ -92,6 +97,43 @@ caller unless overridden.
 | `public_turnstile_site_key` | `""` | Public site key only. Preview callers may pass the Cloudflare dummy key |
 | `public_lead_intake_enabled` | `""` | |
 | `public_leads_api_url` | `""` | |
+| `app_config` | `false` | Must stay false. Use `pages-build-app-config.yml` instead |
+| `app_config_key_prefixes` | `PUBLIC_,NEXT_PUBLIC_` | Unused here; accepted so a mistaken `app_config: true` still fail-fasts |
+
+### `pages-build-app-config.yml`
+
+Same build as `pages-build.yml`, then reads public prefixes from Azure App
+Configuration. Callers pin `@v1` and grant `id-token: write`. Local
+`./actions/...` paths resolve against the **caller** workspace, so this
+workflow checks out `job.workflow_repository` at `job.workflow_sha` into
+`.github-workflows-src` (same pattern as `pages-smoke.yml`). Nested login
+is SHA-pinned `singleton-sd/.github/actions/azure-oidc-login`.
+
+Non-empty `public_*` inputs win over App Configuration (preview dummy
+Turnstile key). Empty inputs leave the store values.
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `node_version` | `24` | |
+| `working_directory` | `.` | Site package directory relative to the repository root |
+| `dist_path` | `dist` | Relative to `working_directory` |
+| `turnstile_policy` | `when-lead-intake-enabled` | `always` requires the public Turnstile site key on every build |
+| `preview_base_path` | `""` | Set on preview builds (for example `/pr-preview/pr-12/`) |
+| `run_a11y` | `true` | |
+| `artifact_name` | `pages-dist` | Use `preview-dist` on preview jobs |
+| `public_turnstile_site_key` | `""` | Non-empty values win over App Configuration |
+| `public_lead_intake_enabled` | `""` | Non-empty values win over App Configuration |
+| `public_leads_api_url` | `""` | Non-empty values win over App Configuration |
+| `app_config_key_prefixes` | `PUBLIC_,NEXT_PUBLIC_` | Comma-separated prefixes to export |
+
+```yaml
+jobs:
+  build:
+    uses: singleton-sd/.github/.github/workflows/pages-build-app-config.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+```
 
 ### `pages-deploy.yml`
 
@@ -133,6 +175,23 @@ jobs:
       contents: read
       pull-requests: read
 ```
+
+### `config-read.yml`
+
+No secrets. Callers pin `@v1`. Grant `id-token: write` and `contents: read`
+on the caller job. See [`docs/config.md`](docs/config.md).
+
+```yaml
+jobs:
+  config:
+    uses: singleton-sd/.github/.github/workflows/config-read.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+```
+
+Same-job env export (so later steps see `PUBLIC_*`) uses
+[`actions/app-config-read`](actions/app-config-read/README.md) directly.
 
 ### `pages-smoke.yml`
 

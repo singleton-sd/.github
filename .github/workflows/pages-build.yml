@@ -1,5 +1,8 @@
 # Reusable marketing Pages build. No secrets. Callers pin @v1, never @main.
 # PUBLIC_* values come from caller repository variables unless overridden.
+# When app_config is true, this workflow fails fast: GitHub validates
+# nested-job permissions at parse time, so requesting id-token: write here
+# would break every contents:read caller. Use pages-build-app-config.yml.
 # Naming: ADR-011 (Singleton SD reusable workflow naming).
 name: Pages build
 
@@ -39,7 +42,9 @@ on:
       public_turnstile_site_key:
         description: >-
           Optional override for vars.PUBLIC_TURNSTILE_SITE_KEY (public site key
-          only). Preview callers may pass the Cloudflare dummy key.
+          only). Preview callers may pass the Cloudflare dummy key. When
+          App Configuration is enabled (pages-build-app-config.yml), a
+          non-empty value wins over the store.
         type: string
         default: ""
       public_lead_intake_enabled:
@@ -50,6 +55,18 @@ on:
         description: Optional override for vars.PUBLIC_LEADS_API_URL
         type: string
         default: ""
+      app_config:
+        description: >-
+          Must stay false on this workflow. GitHub validates nested-job
+          permissions at parse time, so this job cannot request id-token:
+          write without breaking contents:read callers. Use
+          pages-build-app-config.yml@v1 with id-token: write instead.
+        type: boolean
+        default: false
+      app_config_key_prefixes:
+        description: Comma-separated App Configuration key prefixes to export
+        type: string
+        default: "PUBLIC_,NEXT_PUBLIC_"
 
 permissions: {}
 
@@ -63,6 +80,13 @@ jobs:
       run:
         working-directory: ${{ inputs.working_directory }}
     steps:
+      - name: App Configuration uses pages-build-app-config.yml
+        if: ${{ inputs.app_config }}
+        run: |
+          set -euo pipefail
+          echo "::error::Call singleton-sd/.github/.github/workflows/pages-build-app-config.yml@v1 with permissions contents: read and id-token: write. GitHub validates reusable-workflow job permissions at parse time, so pages-build.yml cannot request id-token: write without breaking existing contents:read callers."
+          exit 1
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -12,17 +12,19 @@ Naming follows ADR-011 (Singleton SD reusable workflow naming).
   keep [`.github/workflows/actions.lock`](.github/workflows/actions.lock) in
   sync (`node scripts/lint-contract.mjs --write-lock`;
   `gh actions-lock --verify-local`).
-- Reusable Pages workflows are `pages-build.yml`, `pages-deploy.yml`, and
-  `pages-smoke.yml`. Org starters are `pages-production.yml` and
-  `pages-preview.yml`. Reusable security workflow is `security-scan.yml`.
-  This repo's required checks are `self-ci` and `self-test`.
+- Reusable Pages workflows are `pages-build.yml`, `pages-build-app-config.yml`,
+  `pages-deploy.yml`, and `pages-smoke.yml`. Org starters are
+  `pages-production.yml` and `pages-preview.yml`. Reusable security workflow
+  is `security-scan.yml`. Reusable config workflow is `config-read.yml`;
+  composite is `actions/app-config-read`. This repo's required checks are
+  `self-ci` and `self-test`.
 - Never rename a kit's npmjs release workflow file; it is the registered
   Trusted Publisher.
 - Do not store secrets in this repository. Callers pass secrets through the
   `secrets:` map on `workflow_call` (currently `RELEASE_APP_PRIVATE_KEY`).
 - The singleton-release App ID is read from the caller's `vars.RELEASE_APP_ID`.
-- Do not add consumer-repo changes or an App Configuration reader unless that
-  is the PR's stated goal.
+- Do not add consumer-repo changes unless that is the PR's stated goal.
+  App Configuration reads go through `actions/app-config-read`.
 - Any workflow or action that reads Key Vault uses `actions/azure-oidc-login`
   (OIDC), logs secret names only, and never adds `AZURE_CLIENT_SECRET` or
   `AZURE_CREDENTIALS`. Do not move ordinary CI to the Oracle runner.

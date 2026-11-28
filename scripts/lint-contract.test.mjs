@@ -416,6 +416,54 @@ test("self-release is not required to have working_directory or dry_run", () => 
   );
 });
 
+test("same-repo action SHA pins lock as owner/repo@sha", () => {
+  const root = tempRoot();
+  passingTree(root);
+  const sha = "0e40c2d9fb4139c8715aeae28de50a417e7b72df";
+  writeCompositePin(
+    root,
+    `singleton-sd/.github/actions/azure-oidc-login@${sha} # v1.0.6`,
+  );
+  const result = lintRepo(root, { writeLock: true });
+  assert.equal(result.errors.join("\n"), "");
+  const lock = parseLock(result.lock);
+  const key = `singleton-sd/.github@${sha}`;
+  assert.ok(lock.dependencies[key], result.lock);
+  assert.equal(lock.dependencies[key].ref, "v1.0.6");
+  assert.equal(
+    Object.keys(lock.dependencies).some((item) => item.includes("/actions/azure-oidc-login@")),
+    false,
+    result.lock,
+  );
+});
+
+test("same-repo action pin that disagrees with owner/repo lock key fails", () => {
+  const root = tempRoot();
+  passingTree(root);
+  const oldSha = "0e40c2d9fb4139c8715aeae28de50a417e7b72df";
+  const newSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  writeCompositePin(
+    root,
+    `singleton-sd/.github/actions/azure-oidc-login@${oldSha} # v1.0.6`,
+  );
+  const generated = lintRepo(root, { writeLock: true });
+  assert.equal(generated.errors.join("\n"), "");
+  write(root, ".github/workflows/actions.lock", generated.lock);
+  writeCompositePin(
+    root,
+    `singleton-sd/.github/actions/azure-oidc-login@${newSha} # v1.0.7`,
+  );
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) =>
+      error.includes("actions/azure-oidc-login/action.yml") &&
+      error.includes(newSha) &&
+      error.includes(oldSha),
+    ),
+    result.errors.join("\n"),
+  );
+});
+
 test("local ./ uses are allowed without a lock entry", () => {
   const root = tempRoot();
   passingTree(root);
@@ -508,6 +556,131 @@ test("matching composite pin stays in the lock on write", () => {
   const lock = parseLock(result.lock);
   assert.ok(lock.dependencies[AZURE_PIN]);
   assert.equal(lock.dependencies[AZURE_PIN].ref, "v3.1.0");
+});
+
+function appConfigWorkflow() {
+  return reusableWorkflow({
+    name: "Pages build with App Configuration",
+    filename: "pages-build-app-config.yml",
+  })
+    .replace("name: Pages build", "name: Pages build with App Configuration")
+    .replace(
+      "permissions:\n      contents: read",
+      "permissions:\n      contents: read\n      id-token: write",
+    );
+}
+
+function writePagesBuildAppConfigTree(root) {
+  write(
+    root,
+    ".github/workflows/pages-build.yml",
+    reusableWorkflow({
+      extraSteps: `      - name: App Configuration uses pages-build-app-config.yml
+        run: echo pages-build-app-config.yml
+`,
+    }),
+  );
+  write(root, ".github/workflows/pages-build-app-config.yml", appConfigWorkflow());
+  write(
+    root,
+    ".github/workflows/self-test.yml",
+    selfTestYaml().replace(
+      "    uses: ./.github/workflows/pages-smoke.yml\n",
+      "    uses: ./.github/workflows/pages-smoke.yml\n  pages-build-app-config:\n    permissions:\n      contents: read\n      id-token: write\n    uses: ./.github/workflows/pages-build-app-config.yml\n",
+    ),
+  );
+}
+
+test("pages-build.yml must not request id-token: write", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writePagesBuildAppConfigTree(root);
+  write(
+    root,
+    ".github/workflows/pages-build.yml",
+    reusableWorkflow({
+      extraSteps: `      - name: App Configuration uses pages-build-app-config.yml
+        run: echo pages-build-app-config.yml
+`,
+    }).replace(
+      "permissions:\n      contents: read",
+      "permissions:\n      contents: read\n      id-token: write",
+    ),
+  );
+  lintRepo(root, { writeLock: true });
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) => error.includes("pages-build.yml") && error.includes("id-token: write")),
+    result.errors.join("\n"),
+  );
+});
+
+test("pages-build.yml templates must not grant id-token: write", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writePagesBuildAppConfigTree(root);
+  write(
+    root,
+    "workflow-templates/pages-production.yml",
+    `name: Deploy production GitHub Pages
+on:
+  push:
+jobs:
+  build:
+    uses: singleton-sd/.github/.github/workflows/pages-build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+`,
+  );
+  lintRepo(root, { writeLock: true });
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) => error.includes("workflow-templates/pages-production.yml") && error.includes("id-token: write")),
+    result.errors.join("\n"),
+  );
+});
+
+test("workflows that call app-config-read must SHA-pin nested azure-oidc-login", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writePagesBuildAppConfigTree(root);
+  write(
+    root,
+    ".github/workflows/self-test.yml",
+    selfTestYaml().replace(
+      "    uses: ./.github/workflows/pages-smoke.yml\n",
+      "    uses: ./.github/workflows/pages-smoke.yml\n  app-config-read:\n    permissions:\n      contents: read\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./actions/app-config-read\n",
+    ),
+  );
+  lintRepo(root, { writeLock: true });
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) =>
+      error.includes("self-test.yml") && error.includes("azure-oidc-login"),
+    ),
+    result.errors.join("\n"),
+  );
+});
+
+test("pages-build-app-config.yml must request id-token: write", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writePagesBuildAppConfigTree(root);
+  write(
+    root,
+    ".github/workflows/pages-build-app-config.yml",
+    reusableWorkflow({
+      name: "Pages build with App Configuration",
+      filename: "pages-build-app-config.yml",
+    }).replace("name: Pages build", "name: Pages build with App Configuration"),
+  );
+  lintRepo(root, { writeLock: true });
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) => error.includes("pages-build-app-config.yml") && error.includes("id-token: write")),
+    result.errors.join("\n"),
+  );
 });
 
 test("missing workflow pin still fails after composite-only tolerance", () => {
