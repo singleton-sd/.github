@@ -54,7 +54,7 @@ runs:
   steps:
     - name: Azure OIDC login
       if: ${{ inputs.login == 'true' }}
-      uses: ./../azure-oidc-login # zizmor: ignore[self-repository]
+      uses: ./actions/azure-oidc-login # zizmor: ignore[self-repository]
       with:
         client-id: ${{ inputs.client_id }}
         tenant-id: ${{ inputs.tenant_id }}

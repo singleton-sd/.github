@@ -229,16 +229,8 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      - name: Check out shared App Configuration action
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          persist-credentials: false
-          path: .github-workflows-src
-
       - name: Read App Configuration
-        uses: ./.github-workflows-src/actions/app-config-read # zizmor: ignore[self-repository]
+        uses: ./actions/app-config-read # zizmor: ignore[self-repository]
         with:
           key_prefixes: ${{ inputs.app_config_key_prefixes }}
 
