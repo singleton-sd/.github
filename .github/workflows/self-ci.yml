@@ -72,6 +72,34 @@ jobs:
       - name: Lint reusable workflow contract
         run: node scripts/lint-contract.mjs
 
+      - name: Dependabot-style composite pin drop must pass
+        env:
+          ROOT: tests/fixtures/actions-lock-dependabot-drop
+        run: node scripts/lint-contract.mjs "${ROOT}"
+
+      - name: Composite pin mismatch must fail
+        env:
+          ROOT: tests/fixtures/actions-lock-composite-mismatch
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(node scripts/lint-contract.mjs "${ROOT}" 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::composite mismatch fixture unexpectedly passed"
+            exit 1
+          fi
+          case "${out}" in
+            *azure/login*does\ not\ match*) ;;
+            *)
+              echo "::error::composite mismatch fixture did not report azure/login SHA mismatch"
+              exit 1
+              ;;
+          esac
+          echo "OK composite mismatch failed with azure/login SHA mismatch"
+
       - name: Test Turnstile policy guard
         run: bash scripts/check-turnstile-policy.test.sh
 

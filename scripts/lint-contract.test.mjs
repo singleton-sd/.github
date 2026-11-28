@@ -7,11 +7,22 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { formatLock, lintRepo, parseLock } from "./lint-contract.mjs";
+import {
+  LOCK_HEADER,
+  compositePinMismatchMessage,
+  formatLock,
+  lintRepo,
+  parseLock,
+} from "./lint-contract.mjs";
 
 const script = join(dirname(fileURLToPath(import.meta.url)), "lint-contract.mjs");
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "tests", "fixtures");
 const PIN = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const PIN_LINE = `${PIN} # v7.0.1`;
+const AZURE_SHA = "a641126d1b8aa4d1fa005f4f92df94a3a4c4c906";
+const AZURE_PIN = `azure/login@${AZURE_SHA}`;
+const AZURE_LINE = `${AZURE_PIN} # v3.1.0`;
+const AZURE_WRONG_SHA = "0123456789abcdef0123456789abcdef01234567";
 
 function tempRoot() {
   return mkdtempSync(join(tmpdir(), "lint-contract-"));
@@ -427,4 +438,97 @@ test("CLI --write-lock then verify exits 0", () => {
   const verified = spawnSync(process.execPath, [script, root], { encoding: "utf8" });
   assert.equal(verified.status, 0, verified.stderr);
   assert.match(verified.stdout, /lint-contract: passed/);
+});
+
+function writeCompositePin(root, pinLine) {
+  write(
+    root,
+    "actions/azure-oidc-login/action.yml",
+    `name: Azure OIDC login
+description: Composite fixture
+inputs:
+  client-id:
+    description: unused
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Log in to Azure with OIDC
+      uses: ${pinLine}
+    - name: Write job summary
+      shell: bash
+      env:
+        WORKFLOW_REF: \${{ github.workflow_ref }}
+        HEAD_SHA: \${{ github.sha }}
+      run: |
+        set -euo pipefail
+        echo "\$WORKFLOW_REF \$HEAD_SHA" >> "\$GITHUB_STEP_SUMMARY"
+`,
+  );
+}
+
+test("Dependabot-style drop of a composite-only pin passes", () => {
+  const root = join(FIXTURES, "actions-lock-dependabot-drop");
+  const result = lintRepo(root);
+  assert.equal(result.errors.join("\n"), "");
+  assert.ok(
+    result.pins.some((pin) => pin.uses === AZURE_PIN),
+    "fixture must include the composite-only azure/login pin",
+  );
+  const cli = spawnSync(process.execPath, [script, root], { encoding: "utf8" });
+  assert.equal(cli.status, 0, cli.stderr + cli.stdout);
+});
+
+test("composite pin that disagrees with the lock fails", () => {
+  const root = join(FIXTURES, "actions-lock-composite-mismatch");
+  const result = lintRepo(root);
+  const expected = compositePinMismatchMessage(
+    "actions/azure-oidc-login/action.yml",
+    "azure/login",
+    AZURE_SHA,
+    AZURE_WRONG_SHA,
+  );
+  assert.ok(
+    result.errors.includes(expected),
+    result.errors.join("\n"),
+  );
+  const cli = spawnSync(process.execPath, [script, root], { encoding: "utf8" });
+  assert.notEqual(cli.status, 0);
+  assert.match(cli.stderr + cli.stdout, /azure\/login pin .* does not match/);
+  assert.match(cli.stderr + cli.stdout, new RegExp(AZURE_SHA));
+  assert.match(cli.stderr + cli.stdout, new RegExp(AZURE_WRONG_SHA));
+});
+
+test("matching composite pin stays in the lock on write", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writeCompositePin(root, AZURE_LINE);
+  const result = lintRepo(root, { writeLock: true });
+  assert.equal(result.errors.join("\n"), "");
+  const lock = parseLock(result.lock);
+  assert.ok(lock.dependencies[AZURE_PIN]);
+  assert.equal(lock.dependencies[AZURE_PIN].ref, "v3.1.0");
+});
+
+test("missing workflow pin still fails after composite-only tolerance", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writeCompositePin(root, AZURE_LINE);
+  lintRepo(root, { writeLock: true });
+  write(
+    root,
+    ".github/workflows/actions.lock",
+    `${LOCK_HEADER}
+version: 'v0.0.3'
+workflows: {}
+dependencies: {}
+`,
+  );
+  const result = lintRepo(root);
+  assert.ok(result.errors.some((error) => error.includes("actions.lock") && error.includes("missing")));
+  assert.equal(
+    result.errors.some((error) => error.includes("azure/login") && error.includes("missing")),
+    false,
+    result.errors.join("\n"),
+  );
 });

@@ -35,6 +35,15 @@ uses the local `./.github/workflows/<file>.yml` path.
 
   Local `./` references and this repository's own `self-*` workflows are
   expected.
+
+  Pins used only inside `actions/*/action.yml` (today `azure/login` in
+  `actions/azure-oidc-login`) are recorded in `actions.lock` by
+  `node scripts/lint-contract.mjs --write-lock`. Dependabot regenerates the
+  lock with `gh actions-lock`, which scans workflow files only, so those
+  composite-only pins are dropped. `lint-contract` derives a missing
+  composite-only pin from the action file and fails only when a lock entry
+  for the same action disagrees (SHA or `# vX.Y.Z`). Dependabot also scans
+  `/actions/*` so composite pins are bumped in the same grouped PR.
 - **Job summary.** Each reusable workflow and composite action writes a job
   summary that includes the workflow ref (`github.workflow_ref`) and SHA
   (`github.sha`).
