@@ -286,6 +286,90 @@ export function lockKeyForPin(pin) {
   return `${match[1].toLowerCase()}@${match[2].toLowerCase()}`;
 }
 
+function isCompositeActionRel(rel) {
+  return /^actions\/.+\/action\.ya?ml$/.test(String(rel).replace(/\\/g, "/"));
+}
+
+function actionNameFromUses(uses) {
+  const match = SHA_USES.exec(uses);
+  if (match) {
+    return match[1];
+  }
+  const at = String(uses).lastIndexOf("@");
+  return at === -1 ? uses : uses.slice(0, at);
+}
+
+export function compositePinMismatchMessage(rel, action, actionSha, lockSha) {
+  return `${rel}: ${action} pin ${actionSha} does not match ${LOCK_REL} ${lockSha}`;
+}
+
+function lockDependenciesForAction(dependencies, actionName) {
+  const prefix = `${String(actionName).toLowerCase()}@`;
+  const found = [];
+  if (!dependencies || typeof dependencies !== "object") {
+    return found;
+  }
+  for (const [key, dep] of Object.entries(dependencies)) {
+    if (key.toLowerCase().startsWith(prefix)) {
+      found.push({ key, dep });
+    }
+  }
+  return found;
+}
+
+function shaFromLockEntry(entry) {
+  const fromCommit = commitSha(entry.dep && entry.dep.commit);
+  if (fromCommit) {
+    return fromCommit;
+  }
+  const keyMatch = SHA_USES.exec(entry.key);
+  return keyMatch ? keyMatch[2].toLowerCase() : "";
+}
+
+function lintCollectedPinsAgainstLock(pins, lock, errors) {
+  for (const pin of pins) {
+    const rel = (pin.from || "").replace(/\\/g, "/");
+    const key = lockKeyForPin(pin);
+    const match = SHA_USES.exec(pin.uses);
+    const sha = match ? match[2].toLowerCase() : "";
+    const action = actionNameFromUses(pin.uses);
+    const dep = lock.dependencies[key];
+    if (dep && typeof dep === "object") {
+      const lockSha = commitSha(dep.commit);
+      if (lockSha !== sha) {
+        errors.push(
+          isCompositeActionRel(rel)
+            ? compositePinMismatchMessage(rel, action, sha, lockSha)
+            : `${LOCK_REL}: ${key} commit does not match workflow SHA`,
+        );
+      }
+      if (pin.version && dep.ref && dep.ref !== pin.version) {
+        errors.push(
+          isCompositeActionRel(rel)
+            ? `${rel}: ${action} pin ${pin.version} does not match ${LOCK_REL} ${dep.ref}`
+            : `${LOCK_REL}: ${key} ref ${dep.ref} does not match comment ${pin.version}`,
+        );
+      }
+      continue;
+    }
+
+    if (isCompositeActionRel(rel)) {
+      const others = lockDependenciesForAction(lock.dependencies, action);
+      if (others.length === 0) {
+        // Dependabot rewrites the lock with `gh actions-lock`, which scans
+        // workflow files only. A composite-only pin is derived from action.yml.
+        continue;
+      }
+      errors.push(
+        compositePinMismatchMessage(rel, action, sha, shaFromLockEntry(others[0])),
+      );
+      continue;
+    }
+
+    errors.push(`${LOCK_REL}: missing ${key}`);
+  }
+}
+
 function yamlQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
@@ -625,22 +709,7 @@ export function lintRepo(root, options = {}) {
     try {
       const lock = parseLock(readFileSync(lockPath, "utf8"));
       errors.push(...duplicateLockKeys(lock.workflows));
-      for (const pin of collected.pins) {
-        const key = lockKeyForPin(pin);
-        const dep = lock.dependencies[key];
-        if (!dep || typeof dep !== "object") {
-          errors.push(`${LOCK_REL}: missing ${key}`);
-          continue;
-        }
-        const match = SHA_USES.exec(pin.uses);
-        const sha = match ? match[2].toLowerCase() : "";
-        if (commitSha(dep.commit) !== sha) {
-          errors.push(`${LOCK_REL}: ${key} commit does not match workflow SHA`);
-        }
-        if (pin.version && dep.ref && dep.ref !== pin.version) {
-          errors.push(`${LOCK_REL}: ${key} ref ${dep.ref} does not match comment ${pin.version}`);
-        }
-      }
+      lintCollectedPinsAgainstLock(collected.pins, lock, errors);
     } catch (err) {
       errors.push(`${LOCK_REL}: ${err.message}`);
     }
