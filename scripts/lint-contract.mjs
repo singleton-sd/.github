@@ -140,6 +140,10 @@ function isLocalUses(uses) {
   return uses.startsWith("./") || uses.startsWith("docker://");
 }
 
+function isSelfRepositoryUses(uses) {
+  return String(uses).startsWith("singleton-sd/.github/");
+}
+
 function isSelfWorkflowName(name, rel) {
   const base = rel.split("/").pop() || "";
   if (base.startsWith("self-")) {
@@ -400,9 +404,16 @@ export function formatLock(pins, existingText = "") {
     }
   }
   const dependencies = { ...existingDeps };
+  for (const key of Object.keys(dependencies)) {
+    if (isSelfRepositoryUses(key)) {
+      delete dependencies[key];
+    }
+  }
   const workflowSets = {};
   for (const [rel, list] of Object.entries(existingWorkflows)) {
-    workflowSets[rel] = new Set(Array.isArray(list) ? list : []);
+    workflowSets[rel] = new Set(
+      (Array.isArray(list) ? list : []).filter((key) => !isSelfRepositoryUses(key)),
+    );
   }
   for (const pin of pins) {
     const key = lockKeyForPin(pin);
@@ -530,6 +541,12 @@ export function collectThirdPartyPins(root) {
       }
       if (!pin.version) {
         errors.push(`${rel}: uses: ${pin.uses} is missing a # vX.Y.Z comment`);
+        continue;
+      }
+      // GitHub's native actions.lock validator rejects same-repo pins
+      // (`singleton-sd/.github/actions/...@sha`), so they stay SHA-pinned
+      // in YAML only and are not recorded in the lock.
+      if (isSelfRepositoryUses(pin.uses)) {
         continue;
       }
       pins.push({ ...pin, from: rel });

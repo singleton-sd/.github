@@ -825,16 +825,6 @@ jobs:
           tenant-id: 00000000-0000-0000-0000-000000000000
           subscription-id: 00000000-0000-0000-0000-000000000000
 
-      # Never runs. Records the SHA-pinned nested azure-oidc-login used by
-      # actions/app-config-read (local ./ would resolve in the caller).
-      - name: Lock nested azure-oidc-login pin
-        if: ${{ github.run_attempt == 0 }}
-        uses: singleton-sd/.github/actions/azure-oidc-login@0e40c2d9fb4139c8715aeae28de50a417e7b72df # v1.0.6
-        with:
-          client-id: 00000000-0000-0000-0000-000000000000
-          tenant-id: 00000000-0000-0000-0000-000000000000
-          subscription-id: 00000000-0000-0000-0000-000000000000
-
       - name: Install az stub
         env:
           FIXTURE: tests/fixtures/app-config/happy-path.json

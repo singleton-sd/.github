@@ -416,6 +416,23 @@ test("self-release is not required to have working_directory or dry_run", () => 
   );
 });
 
+test("same-repo SHA pins are allowed without a lock entry", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writeCompositePin(
+    root,
+    "singleton-sd/.github/actions/azure-oidc-login@0e40c2d9fb4139c8715aeae28de50a417e7b72df # v1.0.6",
+  );
+  const result = lintRepo(root, { writeLock: true });
+  assert.equal(result.errors.join("\n"), "");
+  const lock = parseLock(result.lock);
+  assert.equal(
+    Object.keys(lock.dependencies).some((key) => key.startsWith("singleton-sd/.github/")),
+    false,
+    result.lock,
+  );
+});
+
 test("local ./ uses are allowed without a lock entry", () => {
   const root = tempRoot();
   passingTree(root);
