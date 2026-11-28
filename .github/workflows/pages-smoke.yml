@@ -1,0 +1,72 @@
+# Reusable live GitHub Pages smoke check. Callers pin @v1, never @main.
+# Checks out this reusable workflow's own repo and SHA (never a hardcoded v1).
+# A cached GitHub Pages 404 cannot pass: the index must be HTTP 200 and
+# contain the expected title and/or root needle, and every stylesheet/script
+# must be HTTP 200 with a CSS/JS content-type (HTML 404 bodies fail).
+name: Pages smoke
+
+on:
+  workflow_call:
+    inputs:
+      url:
+        description: Live Pages URL to fetch (production or preview)
+        type: string
+        required: true
+      expect_title:
+        description: Required substring of the document <title>
+        type: string
+        default: ""
+      expect_root:
+        description: Optional HTML needle that a cached 404 page will not contain
+        type: string
+        default: ""
+      timeout_ms:
+        description: Total retry budget in milliseconds
+        type: number
+        default: 300000
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Require title or root needle
+        env:
+          SMOKE_TITLE: ${{ inputs.expect_title }}
+          SMOKE_ROOT: ${{ inputs.expect_root }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SMOKE_TITLE:-}" ] && [ -z "${SMOKE_ROOT:-}" ]; then
+            echo "::error::Pass expect_title and/or expect_root so a cached GitHub Pages 404 cannot pass."
+            exit 1
+          fi
+
+      - name: Check out shared smoke script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+          path: .github-workflows-src
+
+      - name: Run live Pages smoke check
+        env:
+          SMOKE_URL: ${{ inputs.url }}
+          SMOKE_TITLE: ${{ inputs.expect_title }}
+          SMOKE_ROOT: ${{ inputs.expect_root }}
+          SMOKE_TIMEOUT_MS: ${{ inputs.timeout_ms }}
+        run: |
+          set -euo pipefail
+          args=(--url "$SMOKE_URL" --timeout-ms "$SMOKE_TIMEOUT_MS" --interval-ms 10000)
+          if [ -n "${SMOKE_TITLE:-}" ]; then
+            args+=(--expect-title "$SMOKE_TITLE")
+          fi
+          if [ -n "${SMOKE_ROOT:-}" ]; then
+            args+=(--expect-root "$SMOKE_ROOT")
+          fi
+          node .github-workflows-src/scripts/smoke-live.mjs "${args[@]}"

@@ -1,0 +1,161 @@
+# Reusable marketing Pages deploy. Callers pin @v1, never @main.
+# Secrets are never stored in singleton-sd/.github; pass RELEASE_APP_PRIVATE_KEY
+# via secrets:. App ID comes from the caller's vars.RELEASE_APP_ID.
+# Naming: ADR-011 (Singleton SD reusable workflow naming).
+name: Pages deploy
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: production (gh-pages root) or preview (pr-preview umbrella)
+        type: string
+        required: true
+      working_directory:
+        description: Site package directory relative to the repository root
+        type: string
+        default: "."
+      dist_path:
+        description: Directory that holds the downloaded dist, relative to working_directory
+        type: string
+        default: dist
+      preview_umbrella:
+        description: Preview umbrella directory (also production clean-exclude)
+        type: string
+        default: pr-preview
+      repository:
+        description: >-
+          Repository name (no owner) for the singleton-release App token
+          allow-list. Defaults to the caller repository.
+        type: string
+        default: ""
+      artifact_name:
+        description: Artifact uploaded by pages-build
+        type: string
+        default: pages-dist
+      pages_base_url:
+        description: Public Pages origin for pr-preview-action (required in preview mode)
+        type: string
+        default: ""
+      preview_action:
+        description: rossjrw/pr-preview-action action (deploy or remove)
+        type: string
+        default: deploy
+    secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        description: GitHub App private key for singleton-release (contents:write on gh-pages)
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Validate mode
+        env:
+          MODE: ${{ inputs.mode }}
+          PREVIEW_ACTION: ${{ inputs.preview_action }}
+          PAGES_BASE_URL: ${{ inputs.pages_base_url }}
+        run: |
+          set -euo pipefail
+          case "${MODE}" in
+            production|preview) ;;
+            *)
+              echo "::error::mode must be production or preview, got '${MODE}'."
+              exit 1
+              ;;
+          esac
+          if [ "${MODE}" = preview ]; then
+            case "${PREVIEW_ACTION}" in
+              deploy|remove) ;;
+              *)
+                echo "::error::preview_action must be deploy or remove, got '${PREVIEW_ACTION}'."
+                exit 1
+                ;;
+            esac
+            if [ -z "${PAGES_BASE_URL:-}" ]; then
+              echo "::error::pages_base_url is required when mode is preview."
+              exit 1
+            fi
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download dist
+        if: inputs.mode == 'production' || inputs.preview_action != 'remove'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
+
+      - name: Ensure .nojekyll for GitHub Pages
+        if: inputs.mode == 'production' || inputs.preview_action != 'remove'
+        env:
+          DIST_PATH: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${DIST_PATH}"
+          touch "${DIST_PATH}/.nojekyll"
+          if [ ! -f "${DIST_PATH}/.nojekyll" ]; then
+            echo "::error::${DIST_PATH}/.nojekyll is missing after touch; GitHub Pages would Jekyll-hide /_astro/ assets."
+            exit 1
+          fi
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.repository || github.event.repository.name }}
+          permission-contents: write
+
+      - name: Deploy production site
+        if: inputs.mode == 'production'
+        uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f # v4.8.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: gh-pages
+          folder: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
+          clean: true
+          clean-exclude: ${{ inputs.preview_umbrella }}
+          force: false
+
+      # pr-preview-action is composite; wretry cannot wrap it. Retry push races
+      # against production / other previews with a second attempt.
+      - name: Deploy preview
+        id: preview
+        if: inputs.mode == 'preview'
+        continue-on-error: true
+        uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          source-dir: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
+          preview-branch: gh-pages
+          pages-base-url: ${{ inputs.pages_base_url }}
+          umbrella-dir: ${{ inputs.preview_umbrella }}
+          comment: false
+          action: ${{ inputs.preview_action }}
+
+      - name: Retry deploy preview
+        if: inputs.mode == 'preview' && steps.preview.outcome == 'failure'
+        uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          source-dir: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
+          preview-branch: gh-pages
+          pages-base-url: ${{ inputs.pages_base_url }}
+          umbrella-dir: ${{ inputs.preview_umbrella }}
+          comment: false
+          action: ${{ inputs.preview_action }}

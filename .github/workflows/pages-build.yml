@@ -1,0 +1,164 @@
+# Reusable marketing Pages build. No secrets. Callers pin @v1, never @main.
+# PUBLIC_* values come from caller repository variables unless overridden.
+# Naming: ADR-011 (Singleton SD reusable workflow naming).
+name: Pages build
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: Node.js version for setup-node
+        type: string
+        default: "24"
+      working_directory:
+        description: Site package directory relative to the repository root
+        type: string
+        default: "."
+      dist_path:
+        description: Build output directory, relative to working_directory
+        type: string
+        default: dist
+      turnstile_policy:
+        description: >-
+          when-lead-intake-enabled requires PUBLIC_TURNSTILE_SITE_KEY only
+          when PUBLIC_LEAD_INTAKE_ENABLED is on. always requires the key.
+        type: string
+        default: when-lead-intake-enabled
+      preview_base_path:
+        description: Optional Astro/base path for PR preview builds (e.g. /pr-preview/pr-12/)
+        type: string
+        default: ""
+      run_a11y:
+        description: Run pnpm test:a11y after the build
+        type: boolean
+        default: true
+      artifact_name:
+        description: Name of the uploaded dist artifact
+        type: string
+        default: pages-dist
+      public_turnstile_site_key:
+        description: >-
+          Optional override for vars.PUBLIC_TURNSTILE_SITE_KEY (public site key
+          only). Preview callers may pass the Cloudflare dummy key.
+        type: string
+        default: ""
+      public_lead_intake_enabled:
+        description: Optional override for vars.PUBLIC_LEAD_INTAKE_ENABLED
+        type: string
+        default: ""
+      public_leads_api_url:
+        description: Optional override for vars.PUBLIC_LEADS_API_URL
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: ${{ inputs.working_directory }}/package.json
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+          cache-dependency-path: ${{ inputs.working_directory }}/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Lint and type-check
+        run: pnpm lint
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Require Turnstile site key
+        env:
+          TURNSTILE_POLICY: ${{ inputs.turnstile_policy }}
+          PUBLIC_LEAD_INTAKE_ENABLED: ${{ inputs.public_lead_intake_enabled || vars.PUBLIC_LEAD_INTAKE_ENABLED }}
+          PUBLIC_TURNSTILE_SITE_KEY: ${{ inputs.public_turnstile_site_key || vars.PUBLIC_TURNSTILE_SITE_KEY }}
+        run: |
+          set -euo pipefail
+          # Keep in sync with scripts/check-turnstile-policy.sh (tested in self-test).
+          case "${PUBLIC_LEAD_INTAKE_ENABLED:-}" in
+            true|TRUE|1|yes|YES) enabled=1 ;;
+            *) enabled=0 ;;
+          esac
+          case "${TURNSTILE_POLICY}" in
+            always)
+              if [ -z "${PUBLIC_TURNSTILE_SITE_KEY:-}" ]; then
+                echo "::error::Set repository variable PUBLIC_TURNSTILE_SITE_KEY (public site key only)."
+                exit 1
+              fi
+              ;;
+            when-lead-intake-enabled)
+              if [ "$enabled" = 1 ] && [ -z "${PUBLIC_TURNSTILE_SITE_KEY:-}" ]; then
+                echo "::error::Set repository variable PUBLIC_TURNSTILE_SITE_KEY (public site key only) before enabling PUBLIC_LEAD_INTAKE_ENABLED."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Unknown turnstile_policy '${TURNSTILE_POLICY}' (expected always or when-lead-intake-enabled)."
+              exit 1
+              ;;
+          esac
+
+      - name: Build site
+        env:
+          PUBLIC_LEAD_INTAKE_ENABLED: ${{ inputs.public_lead_intake_enabled || vars.PUBLIC_LEAD_INTAKE_ENABLED }}
+          PUBLIC_TURNSTILE_SITE_KEY: ${{ inputs.public_turnstile_site_key || vars.PUBLIC_TURNSTILE_SITE_KEY }}
+          PUBLIC_LEADS_API_URL: ${{ inputs.public_leads_api_url || vars.PUBLIC_LEADS_API_URL }}
+          PREVIEW_BASE_PATH: ${{ inputs.preview_base_path }}
+        run: pnpm build
+
+      - name: Install Playwright browsers
+        run: pnpm playwright:install
+
+      - name: SEO metadata checks
+        run: pnpm test:seo
+
+      - name: Accessibility checks
+        if: ${{ inputs.run_a11y }}
+        run: pnpm test:a11y
+
+      - name: Ensure .nojekyll for GitHub Pages
+        env:
+          DIST_PATH: ${{ inputs.dist_path }}
+        run: |
+          set -euo pipefail
+          touch "${DIST_PATH}/.nojekyll"
+          if [ ! -f "${DIST_PATH}/.nojekyll" ]; then
+            echo "::error::${DIST_PATH}/.nojekyll is missing after touch; GitHub Pages would Jekyll-hide /_astro/ assets."
+            exit 1
+          fi
+
+      - name: Upload dist
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
