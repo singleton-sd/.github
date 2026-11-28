@@ -319,7 +319,9 @@ jobs:
     uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
     with:
       working_directory: tests/fixtures/security-scan-clean
-      dependency_review: ${{ 'false' }}
+      # Fixture jobs skip dependency review; YAML false is a bool and cannot
+      # be assigned to this string input, so the value is a string literal.
+      dependency_review: ${{ 'false' }} # zizmor: ignore[obfuscation]
 
   security-scan-tag-pinned:
     name: security-scan-tag-pinned
@@ -329,7 +331,9 @@ jobs:
     uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
     with:
       working_directory: tests/fixtures/security-scan-tag-pinned
-      dependency_review: ${{ 'false' }}
+      # Fixture jobs skip dependency review; YAML false is a bool and cannot
+      # be assigned to this string input, so the value is a string literal.
+      dependency_review: ${{ 'false' }} # zizmor: ignore[obfuscation]
 
   security-scan-secrets-inherit:
     name: security-scan-secrets-inherit
@@ -339,7 +343,9 @@ jobs:
     uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
     with:
       working_directory: tests/fixtures/security-scan-secrets-inherit
-      dependency_review: ${{ 'false' }}
+      # Fixture jobs skip dependency review; YAML false is a bool and cannot
+      # be assigned to this string input, so the value is a string literal.
+      dependency_review: ${{ 'false' }} # zizmor: ignore[obfuscation]
 
   security-scan-azure-login:
     name: security-scan-azure-login
@@ -349,7 +355,9 @@ jobs:
     uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
     with:
       working_directory: tests/fixtures/security-scan-azure-login
-      dependency_review: ${{ 'false' }}
+      # Fixture jobs skip dependency review; YAML false is a bool and cannot
+      # be assigned to this string input, so the value is a string literal.
+      dependency_review: ${{ 'false' }} # zizmor: ignore[obfuscation]
 
   security-scan-gitleaks-runtime:
     name: security-scan-gitleaks-runtime
