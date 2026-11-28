@@ -1,0 +1,78 @@
+# Required check job name: self-test.
+# Calls local reusable Pages workflows against the fixture and production URL.
+# Never pin this repo's own workflows at @v1 / @main here.
+name: self-test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  pages-build:
+    name: pages-build
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pages-build.yml # zizmor: ignore[self-repository]
+    with:
+      working_directory: tests/fixtures/pages-astro
+      artifact_name: self-test-pages-dist
+      run_a11y: true
+      turnstile_policy: when-lead-intake-enabled
+
+  pages-deploy:
+    name: pages-deploy
+    needs: pages-build
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/pages-deploy.yml # zizmor: ignore[self-repository]
+    with:
+      mode: production
+      working_directory: tests/fixtures/pages-astro
+      artifact_name: self-test-pages-dist
+      dry_run: true
+      repository: ${{ github.event.repository.name }}
+
+  pages-smoke:
+    name: pages-smoke
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pages-smoke.yml # zizmor: ignore[self-repository]
+    with:
+      url: https://leasemate.singletonsd.com/
+      expect_title: LeaseMate
+      timeout_ms: 60000
+
+  self-test:
+    name: self-test
+    if: always()
+    needs: [pages-build, pages-deploy, pages-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require reusable workflow jobs
+        env:
+          BUILD: ${{ needs.pages-build.result }}
+          DEPLOY: ${{ needs.pages-deploy.result }}
+          SMOKE: ${{ needs.pages-smoke.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}"; do
+            name="${pair%%:*}"
+            result="${pair#*:}"
+            if [ "$result" != success ]; then
+              echo "::error::${name} result is ${result}"
+              failed=1
+            else
+              echo "OK ${name} success"
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi

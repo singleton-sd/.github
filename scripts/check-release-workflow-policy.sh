@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "${1:-$(dirname "$0")/..}" && pwd)"
-WORKFLOW="${2:-$ROOT/.github/workflows/release.yml}"
+WORKFLOW="${2:-$ROOT/.github/workflows/self-release.yml}"
 
 python3 - "$ROOT" "$WORKFLOW" <<'PY'
 import re

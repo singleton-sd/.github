@@ -7,14 +7,13 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   self-ci:
     name: self-ci
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -37,6 +36,12 @@ jobs:
       - name: Run actionlint
         run: actionlint -color .github/workflows/*.yml workflow-templates/*.yml
 
+      - name: Run shellcheck
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          find scripts actions -name '*.sh' -print0 | xargs -0 --no-run-if-empty shellcheck
+
       - name: Check Azure OIDC policy
         run: bash scripts/check-azure-oidc-policy.sh
 
@@ -48,36 +53,22 @@ jobs:
         with:
           node-version: 24
 
-      - name: Smoke live LeaseMate production
-        run: |
-          node scripts/smoke-live.mjs \
-            --url https://leasemate.singletonsd.com/ \
-            --expect-title LeaseMate \
-            --timeout-ms 60000 \
-            --interval-ms 10000
-
-  self-test:
-    name: self-test
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-
       - name: Syntax-check smoke-live.mjs
         run: node --check scripts/smoke-live.mjs
 
-      - name: Test smoke-live.mjs
-        run: node --test scripts/smoke-live.test.mjs
+      - name: Run Node tests
+        run: node --test scripts/smoke-live.test.mjs scripts/lint-contract.test.mjs
+
+      - name: Verify actions.lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh extension install github/gh-actions-lock --pin v0.5.1
+          gh actions-lock --verify-local
+
+      - name: Lint reusable workflow contract
+        run: node scripts/lint-contract.mjs
 
       - name: Test Turnstile policy guard
         run: bash scripts/check-turnstile-policy.test.sh
@@ -99,3 +90,19 @@ jobs:
 
       - name: Test release workflow policy
         run: bash scripts/check-release-workflow-policy.test.sh
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@1b4550e929643b8b26a62303c6bd64814271a4f1 # v0.9.2
+        with:
+          advanced-security: false
+          annotations: true
+          config: .github/zizmor.yml
+          inputs: |
+            .github/workflows/pages-build.yml
+            .github/workflows/pages-deploy.yml
+            .github/workflows/pages-smoke.yml
+            .github/workflows/self-ci.yml
+            .github/workflows/self-test.yml
+            .github/workflows/self-release.yml
+            workflow-templates
+            actions

@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # Version updates off; GitHub security updates still open their own PRs.
+    open-pull-requests-limit: 0
