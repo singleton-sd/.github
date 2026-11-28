@@ -57,7 +57,7 @@ jobs:
         run: node --check scripts/smoke-live.mjs
 
       - name: Run Node tests
-        run: node --test scripts/smoke-live.test.mjs scripts/lint-contract.test.mjs
+        run: node --test scripts/smoke-live.test.mjs scripts/lint-contract.test.mjs scripts/check-caller-contract.test.mjs
 
       - name: Verify actions.lock
         env:
@@ -109,5 +109,6 @@ jobs:
             .github/workflows/self-ci.yml
             .github/workflows/self-test.yml
             .github/workflows/self-release.yml
+            .github/workflows/security-scan.yml
             workflow-templates
             actions

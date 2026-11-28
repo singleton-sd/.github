@@ -311,6 +311,120 @@ jobs:
             exit 1
           fi
 
+  security-scan-clean:
+    name: security-scan-clean
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
+    with:
+      working_directory: tests/fixtures/security-scan-clean
+      dependency_review: ${{ 'false' }}
+
+  security-scan-tag-pinned:
+    name: security-scan-tag-pinned
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
+    with:
+      working_directory: tests/fixtures/security-scan-tag-pinned
+      dependency_review: ${{ 'false' }}
+
+  security-scan-secrets-inherit:
+    name: security-scan-secrets-inherit
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
+    with:
+      working_directory: tests/fixtures/security-scan-secrets-inherit
+      dependency_review: ${{ 'false' }}
+
+  security-scan-azure-login:
+    name: security-scan-azure-login
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
+    with:
+      working_directory: tests/fixtures/security-scan-azure-login
+      dependency_review: ${{ 'false' }}
+
+  security-scan-gitleaks-runtime:
+    name: security-scan-gitleaks-runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSLf -o "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}" gitleaks
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Detect a runtime-built fake secret
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          prefix = "".join(["A", "K", "I", "A"])
+          body = "".join(["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P"])
+          path = Path(os.environ["RUNNER_TEMP"]) / "gitleaks-runtime-fixture.txt"
+          path.write_text(f"token={prefix}{body}\n", encoding="utf8")
+          PY
+          json="${RUNNER_TEMP}/gitleaks-runtime.json"
+          set +e
+          gitleaks detect --no-git --redact --no-banner --exit-code 1 \
+            --source "${RUNNER_TEMP}/gitleaks-runtime-fixture.txt" \
+            --report-format json --report-path "${json}" \
+            >/dev/null 2>&1
+          code=$?
+          set -e
+          python3 - "$code" "${json}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          code = int(sys.argv[1])
+          path = Path(sys.argv[2])
+          findings = []
+          if path.is_file() and path.read_text(encoding="utf8").strip():
+              loaded = json.loads(path.read_text(encoding="utf8"))
+              if isinstance(loaded, list):
+                  findings = loaded
+          rules = sorted(
+              {
+                  str(item.get("RuleID") or item.get("Rule") or "unknown")
+                  for item in findings
+                  if isinstance(item, dict)
+              }
+          )
+          if code not in (0, 1):
+              print(f"::error::gitleaks runtime test failed with exit {code}")
+              raise SystemExit(1)
+          if not findings:
+              print("::error::gitleaks did not report the runtime-built fixture")
+              raise SystemExit(1)
+          print(f"gitleaks runtime: {len(findings)} finding(s); rules: {', '.join(rules)}")
+          PY
+          rm -f "${RUNNER_TEMP}/gitleaks-runtime-fixture.txt" "${json}"
+
   self-test:
     name: self-test
     if: always()
@@ -324,6 +438,11 @@ jobs:
         setup-pnpm-node-cache-false,
         setup-pnpm-node-workspace,
         setup-pnpm-node-fail,
+        security-scan-clean,
+        security-scan-tag-pinned,
+        security-scan-secrets-inherit,
+        security-scan-azure-login,
+        security-scan-gitleaks-runtime,
       ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -340,10 +459,15 @@ jobs:
           SETUP_CACHE_FALSE: ${{ needs.setup-pnpm-node-cache-false.result }}
           SETUP_WORKSPACE: ${{ needs.setup-pnpm-node-workspace.result }}
           SETUP_FAIL: ${{ needs.setup-pnpm-node-fail.result }}
+          SCAN_CLEAN: ${{ needs.security-scan-clean.result }}
+          SCAN_TAG: ${{ needs.security-scan-tag-pinned.result }}
+          SCAN_SECRETS: ${{ needs.security-scan-secrets-inherit.result }}
+          SCAN_AZURE: ${{ needs.security-scan-azure-login.result }}
+          SCAN_GITLEAKS: ${{ needs.security-scan-gitleaks-runtime.result }}
         run: |
           set -euo pipefail
           failed=0
-          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}"; do
+          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             if [ "$result" != success ]; then
@@ -351,6 +475,16 @@ jobs:
               failed=1
             else
               echo "OK ${name} success"
+            fi
+          done
+          for pair in "security-scan-tag-pinned:${SCAN_TAG}" "security-scan-secrets-inherit:${SCAN_SECRETS}" "security-scan-azure-login:${SCAN_AZURE}"; do
+            name="${pair%%:*}"
+            result="${pair#*:}"
+            if [ "$result" != failure ]; then
+              echo "::error::${name} result is ${result}, expected failure"
+              failed=1
+            else
+              echo "OK ${name} failed as asserted"
             fi
           done
           if [ "$failed" -ne 0 ]; then

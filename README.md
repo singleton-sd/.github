@@ -44,6 +44,7 @@ Releases are cut by [`.github/workflows/self-release.yml`](.github/workflows/sel
 | self | [`self-ci.yml`](.github/workflows/self-ci.yml) | Required check `self-ci`: actionlint, shellcheck, policy tests, contract lint, zizmor | n/a (this repo) | none | active | this repository |
 | self | [`self-test.yml`](.github/workflows/self-test.yml) | Required check `self-test`: local Pages fixture build, deploy `dry_run`, live smoke | n/a (this repo) | none | active | this repository |
 | self | [`self-release.yml`](.github/workflows/self-release.yml) | After those checks pass on `main`, cut annotated `v1.x.y` and move floating `v1` | n/a (this repo) | `RELEASE_APP_PRIVATE_KEY` (this repo) | active | this repository |
+| security | [`security-scan.yml`](.github/workflows/security-scan.yml) | actionlint, zizmor, gitleaks, dependency review, caller contract | `contents: read`, `pull-requests: read` | none | active | none yet |
 | security | [`actions/azure-oidc-login`](actions/azure-oidc-login/README.md) | Azure login via GitHub OIDC; optional Key Vault read | `id-token: write`, `contents: read` | none (OIDC) | active | none in this repo |
 | config | — | Shared config reader | — | — | not built until two callers exist | — |
 | release | — | Shared consumer release-version workflow | — | — | not built until two callers exist | — |
@@ -111,6 +112,26 @@ caller unless overridden.
 
 The App token is minted as the last setup step and is the only credential
 used to push `gh-pages`. Jobs never use `GITHUB_TOKEN` for deploy.
+
+### `security-scan.yml`
+
+No secrets. Callers pin `@v1`. See [`docs/security.md`](docs/security.md).
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `working_directory` | `.` | Directory that holds `.github/workflows` |
+| `dependency_review` | `auto` | Public `pull_request` only when `auto`; private repos skip |
+| `enforce_banned_steps` | `true` | Fail enforced entries in `scripts/banned-steps.json` |
+| `fail_on_findings` | `true` | Fail the job on enforced scanner findings |
+
+```yaml
+jobs:
+  security:
+    uses: singleton-sd/.github/.github/workflows/security-scan.yml@v1
+    permissions:
+      contents: read
+      pull-requests: read
+```
 
 ### `pages-smoke.yml`
 

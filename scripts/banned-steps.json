@@ -1,0 +1,41 @@
+{
+  "steps": [
+    {
+      "id": "inline-azure-login",
+      "_comment": "Enforced. The shared replacement already ships as actions/azure-oidc-login.",
+      "flip_when": "Already shipped; keep enforce true.",
+      "usesContains": "azure/login",
+      "replacement": "singleton-sd/.github/actions/azure-oidc-login@v1",
+      "enforce": true
+    },
+    {
+      "id": "inline-github-app-token",
+      "_comment": "Warn until a shared GitHub App token composite action ships. Do not copy actions/create-github-app-token into callers.",
+      "flip_when": "Flip enforce to true in the GitHub issue that adds the shared GitHub App token composite action.",
+      "usesContains": "actions/create-github-app-token",
+      "replacement": "singleton-sd/.github/actions/mint-release-app-token@v1 (not shipped)",
+      "enforce": false
+    },
+    {
+      "id": "inline-release-commit-back",
+      "_comment": "Warn until the shared consumer release-version workflow ships. Inline release-it / commit-back of version tags is a copy of that protocol.",
+      "flip_when": "Flip enforce to true in the GitHub issue that adds the shared consumer release-version workflow.",
+      "usesContains": [
+        "googleapis/release-please-action",
+        "release-it/release-it-action"
+      ],
+      "runPattern": "\\brelease-it\\b",
+      "replacement": "singleton-sd/.github/.github/workflows/release-version.yml@v1 (not shipped)",
+      "enforce": false
+    },
+    {
+      "id": "inline-spool-deploy",
+      "_comment": "Warn until the shared deploy spool workflow ships. Inline spool-deploy protocol copies must not land in callers.",
+      "flip_when": "Flip enforce to true in the GitHub issue that adds the shared deploy spool workflow.",
+      "usesContains": "spool-deploy",
+      "runPattern": "spool[-_ ]deploy",
+      "replacement": "singleton-sd/.github/.github/workflows/spool-deploy.yml@v1 (not shipped)",
+      "enforce": false
+    }
+  ]
+}

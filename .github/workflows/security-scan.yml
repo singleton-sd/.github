@@ -1,0 +1,476 @@
+# Reusable caller security scan. Callers pin @v1, never @main.
+# actionlint, zizmor, gitleaks, dependency review, caller-contract check.
+name: Security scan
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: Caller directory that holds .github/workflows (repository-relative)
+        type: string
+        default: "."
+      dependency_review:
+        description: >-
+          auto runs GitHub dependency review only on public pull_request
+          events; true/false force on or off (private repos always skip)
+        type: string
+        default: auto
+      enforce_banned_steps:
+        description: Fail on banned-steps.json entries that have enforce true
+        type: boolean
+        default: true
+      fail_on_findings:
+        description: Fail the job when a scanner reports enforced findings
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.run_id }}-${{ inputs.working_directory }}-security-scan
+  cancel-in-progress: true
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check out shared scan scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+          path: .github-workflows-src
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install pinned scanners
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+          ZIZMOR_VERSION: "1.33.1"
+          ZIZMOR_SHA256: "3e6a301c7a820a2501915f5a9de8c0486da82bdec7965f068477538a98743d43"
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.local/bin"
+
+          actionlint_archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSLf -o "${RUNNER_TEMP}/${actionlint_archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${actionlint_archive}"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${actionlint_archive}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${actionlint_archive}" -C "${RUNNER_TEMP}" actionlint
+          install -m 0755 "${RUNNER_TEMP}/actionlint" "${HOME}/.local/bin/actionlint"
+
+          zizmor_archive="zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSLf -o "${RUNNER_TEMP}/${zizmor_archive}" \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/${zizmor_archive}"
+          echo "${ZIZMOR_SHA256}  ${RUNNER_TEMP}/${zizmor_archive}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${zizmor_archive}" -C "${RUNNER_TEMP}" zizmor
+          install -m 0755 "${RUNNER_TEMP}/zizmor" "${HOME}/.local/bin/zizmor"
+
+          gitleaks_archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSLf -o "${RUNNER_TEMP}/${gitleaks_archive}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${gitleaks_archive}"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${gitleaks_archive}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${gitleaks_archive}" -C "${RUNNER_TEMP}" gitleaks
+          install -m 0755 "${RUNNER_TEMP}/gitleaks" "${HOME}/.local/bin/gitleaks"
+
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+          mkdir -p "${RUNNER_TEMP}/security-scan-results"
+
+      - name: Resolve scan root
+        id: root
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          rel = os.environ.get("WORKING_DIRECTORY") or "."
+          scan_root = (workspace / rel).resolve()
+          if scan_root != workspace and workspace not in scan_root.parents:
+              raise SystemExit(f"working_directory escapes the workspace: {rel}")
+          if not scan_root.is_dir():
+              raise SystemExit(f"working_directory is not a directory: {rel}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"scan_root={scan_root}\n")
+          print(f"scan_root={scan_root}")
+          PY
+
+      - name: actionlint
+        env:
+          SCAN_ROOT: ${{ steps.root.outputs.scan_root }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/security-scan-results/actionlint"
+          mkdir -p "${RUNNER_TEMP}/security-scan-results"
+          mapfile -t files < <(find "${SCAN_ROOT}/.github/workflows" "${SCAN_ROOT}/workflow-templates" \
+            \( -name '*.yml' -o -name '*.yaml' \) ! -name 'actions.lock' -print 2>/dev/null | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            printf '%s\n' "fail" "0" "no-workflows" "no workflow files" >"${results}"
+            exit 0
+          fi
+          set +e
+          actionlint -color "${files[@]}" >"${RUNNER_TEMP}/actionlint.out" 2>&1
+          code=$?
+          set -e
+          # Counts and file names only; drop source snippets after the first colon group.
+          python3 - "$code" "${RUNNER_TEMP}/actionlint.out" "${results}" <<'PY'
+          import sys
+          from pathlib import Path
+
+          code = int(sys.argv[1])
+          output = Path(sys.argv[2]).read_text(encoding="utf8", errors="replace")
+          dest = Path(sys.argv[3])
+          lines = [line for line in output.splitlines() if line.strip()]
+          if code == 0:
+              dest.write_text("pass\n0\n\n\n", encoding="utf8")
+              print("actionlint: 0 error(s)")
+              raise SystemExit(0)
+          if code != 1:
+              print(f"::error::actionlint failed with exit {code}")
+              Path(sys.argv[2]).write_text(output, encoding="utf8")
+              raise SystemExit(1)
+          rules = []
+          for line in lines:
+              parts = line.split(":", 4)
+              if len(parts) >= 4:
+                  rules.append(parts[3].strip().split()[0] if parts[3].strip() else "error")
+              else:
+                  rules.append("error")
+          unique = sorted(set(rules))
+          dest.write_text(
+              f"fail\n{len(lines)}\n{','.join(unique)}\n\n",
+              encoding="utf8",
+          )
+          print(f"actionlint: {len(lines)} error(s); rules: {', '.join(unique) or 'none'}")
+          PY
+
+      - name: zizmor
+        env:
+          SCAN_ROOT: ${{ steps.root.outputs.scan_root }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/security-scan-results/zizmor"
+          config="${RUNNER_TEMP}/zizmor-caller.yml"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          Path(os.environ["RUNNER_TEMP"], "zizmor-caller.yml").write_text(
+              "rules:\n"
+              "  unpinned-uses:\n"
+              "    config:\n"
+              "      policies:\n"
+              '        "singleton-sd/*": ref-pin\n'
+              '        "*": hash-pin\n',
+              encoding="utf8",
+          )
+          PY
+          targets=("${SCAN_ROOT}")
+          if [ -d "${SCAN_ROOT}/workflow-templates" ]; then
+            targets+=("${SCAN_ROOT}/workflow-templates")
+          fi
+          json="${RUNNER_TEMP}/zizmor.json"
+          set +e
+          zizmor --offline --persona=regular --format=json --config "${config}" \
+            "${targets[@]}" >"${json}" 2>"${RUNNER_TEMP}/zizmor.err"
+          code=$?
+          set -e
+          python3 - "$code" "${json}" "${results}" "${RUNNER_TEMP}/zizmor.err" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          code = int(sys.argv[1])
+          json_path = Path(sys.argv[2])
+          dest = Path(sys.argv[3])
+          err = Path(sys.argv[4]).read_text(encoding="utf8", errors="replace")
+          if code not in (0, 11, 12, 13, 14) and code != 3:
+              sys.stderr.write(err)
+              print(f"::error::zizmor failed with exit {code}")
+              raise SystemExit(1)
+          raw = json_path.read_text(encoding="utf8") if json_path.is_file() else "[]"
+          try:
+              findings = json.loads(raw) if raw.strip() else []
+          except json.JSONDecodeError:
+              print("::error::zizmor produced non-JSON output")
+              raise SystemExit(1)
+          if not isinstance(findings, list):
+              findings = []
+
+          def severity_of(item):
+              det = item.get("determinations") if isinstance(item, dict) else {}
+              if not isinstance(det, dict):
+                  return "unknown"
+              return str(det.get("severity") or "unknown").lower()
+
+          high = []
+          warn = []
+          for item in findings:
+              ident = str(item.get("ident") or "unknown")
+              if severity_of(item) == "high":
+                  high.append(ident)
+              else:
+                  warn.append(ident)
+          if code == 3 and not findings:
+              dest.write_text("fail\n0\nno-inputs\nno inputs collected\n", encoding="utf8")
+              print("zizmor: no inputs collected")
+              raise SystemExit(0)
+          status = "fail" if high else ("warn" if warn else "pass")
+          rules = sorted(set(high or warn))
+          dest.write_text(
+              f"{status}\n{len(high) + len(warn)}\n{','.join(rules)}\n"
+              f"enforced=high warn=medium/low/informational\n",
+              encoding="utf8",
+          )
+          print(
+              f"zizmor: {len(high)} high, {len(warn)} warn; rules: {', '.join(rules) or 'none'}"
+          )
+          PY
+          rm -f "${json}"
+
+      - name: gitleaks
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/security-scan-results/gitleaks"
+          json="${RUNNER_TEMP}/gitleaks.json"
+          range=""
+          if [ "${EVENT_NAME}" = pull_request ] && [ -n "${PR_BASE:-}" ] && [ -n "${PR_HEAD:-}" ]; then
+            range="${PR_BASE}..${PR_HEAD}"
+          elif [ -n "${PUSH_BEFORE:-}" ] && [ "${PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ] && [ -n "${PUSH_AFTER:-}" ]; then
+            range="${PUSH_BEFORE}..${PUSH_AFTER}"
+          else
+            range="-1"
+          fi
+          set +e
+          gitleaks detect --source "${GITHUB_WORKSPACE}" --log-opts="${range}" \
+            --redact --no-banner --exit-code 1 \
+            --report-format json --report-path "${json}" \
+            >"${RUNNER_TEMP}/gitleaks.out" 2>&1
+          code=$?
+          set -e
+          python3 - "$code" "${json}" "${results}" "${RUNNER_TEMP}/gitleaks.out" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          code = int(sys.argv[1])
+          json_path = Path(sys.argv[2])
+          dest = Path(sys.argv[3])
+          log = Path(sys.argv[4]).read_text(encoding="utf8", errors="replace")
+          if code not in (0, 1):
+              # Tool failure: log redacted stdout only, never a findings file.
+              for line in log.splitlines():
+                  if "secret" in line.lower() or "leak" in line.lower():
+                      continue
+                  print(line)
+              print(f"::error::gitleaks failed with exit {code}")
+              raise SystemExit(1)
+          findings = []
+          if json_path.is_file():
+              raw = json_path.read_text(encoding="utf8")
+              if raw.strip():
+                  loaded = json.loads(raw)
+                  if isinstance(loaded, list):
+                      findings = loaded
+          rules = sorted(
+              {
+                  str(item.get("RuleID") or item.get("Rule") or "unknown")
+                  for item in findings
+                  if isinstance(item, dict)
+              }
+          )
+          status = "fail" if findings else "pass"
+          dest.write_text(
+              f"{status}\n{len(findings)}\n{','.join(rules)}\n\n",
+              encoding="utf8",
+          )
+          print(f"gitleaks: {len(findings)} finding(s); rules: {', '.join(rules) or 'none'}")
+          PY
+          rm -f "${json}" "${RUNNER_TEMP}/gitleaks.out"
+
+      - name: Decide dependency review
+        id: dep-review-gate
+        env:
+          MODE: ${{ inputs.dependency_review }}
+          PRIVATE_REPO: ${{ github.event.repository.private }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/security-scan-results/dependency-review"
+          mode="${MODE}"
+          private="${PRIVATE_REPO}"
+          event="${EVENT_NAME}"
+          should=no
+          reason=""
+          case "${mode}" in
+            auto|true|false) ;;
+            *)
+              echo "::error::dependency_review must be auto, true, or false"
+              exit 1
+              ;;
+          esac
+          if [ "${private}" = true ]; then
+            reason="skipped: private repo"
+          elif [ "${mode}" = false ]; then
+            reason="skipped: dependency_review=false"
+          elif [ "${event}" != pull_request ]; then
+            reason="skipped: not a pull_request"
+          else
+            should=yes
+          fi
+          if [ "${should}" = no ]; then
+            printf '%s\n' "skip" "0" "" "${reason}" >"${results}"
+            echo "${reason}"
+          fi
+          echo "should=${should}" >> "${GITHUB_OUTPUT}"
+
+      - name: dependency-review
+        id: dep-review
+        if: ${{ steps.dep-review-gate.outputs.should == 'yes' }}
+        continue-on-error: true
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        with:
+          fail-on-severity: high
+
+      - name: Record dependency review
+        if: ${{ always() && steps.dep-review-gate.outputs.should == 'yes' }}
+        env:
+          OUTCOME: ${{ steps.dep-review.outcome }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/security-scan-results/dependency-review"
+          if [ "${OUTCOME}" = success ]; then
+            printf '%s\n' "pass" "0" "" "" >"${results}"
+            echo "dependency-review: 0 finding(s)"
+          else
+            printf '%s\n' "fail" "1" "dependency-review" "" >"${results}"
+            echo "dependency-review: failed (see action summary; names only)"
+          fi
+
+      - name: Caller contract check
+        env:
+          SCAN_ROOT: ${{ steps.root.outputs.scan_root }}
+          ENFORCE_BANNED_STEPS: ${{ inputs.enforce_banned_steps }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/security-scan-results/caller-contract"
+          json="${RUNNER_TEMP}/caller-contract.json"
+          set +e
+          node .github-workflows-src/scripts/check-caller-contract.mjs \
+            --root "${SCAN_ROOT}" \
+            --banned-steps .github-workflows-src/scripts/banned-steps.json \
+            --enforce-banned-steps "${ENFORCE_BANNED_STEPS}" \
+            --json-out "${json}"
+          code=$?
+          set -e
+          python3 - "$code" "${json}" "${results}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          code = int(sys.argv[1])
+          payload = {"errorCount": 0, "warningCount": 0, "errorRules": [], "warningRules": []}
+          path = Path(sys.argv[2])
+          if path.is_file() and path.read_text(encoding="utf8").strip():
+              payload = json.loads(path.read_text(encoding="utf8"))
+          dest = Path(sys.argv[3])
+          errors = int(payload.get("errorCount") or 0)
+          warnings = int(payload.get("warningCount") or 0)
+          rules = payload.get("errorRules") or payload.get("warningRules") or []
+          if not isinstance(rules, list):
+              rules = []
+          status = "fail" if code != 0 or errors else ("warn" if warnings else "pass")
+          dest.write_text(
+              f"{status}\n{errors + warnings}\n{','.join(str(item) for item in rules)}\n\n",
+              encoding="utf8",
+          )
+          print(
+              f"caller-contract: {errors} error(s), {warnings} warning(s); "
+              f"rules: {', '.join(str(item) for item in rules) or 'none'}"
+          )
+          if code not in (0, 1):
+              print(f"::error::caller-contract failed with exit {code}")
+              raise SystemExit(1)
+          PY
+
+      - name: Write job summary
+        if: ${{ always() }}
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          HEAD_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          results_dir = Path(os.environ["RUNNER_TEMP"]) / "security-scan-results"
+          names = [
+              "actionlint",
+              "zizmor",
+              "gitleaks",
+              "dependency-review",
+              "caller-contract",
+          ]
+          lines = [
+              "## Security scan",
+              "",
+              f"- workflow_ref: `{os.environ.get('WORKFLOW_REF', '')}`",
+              f"- sha: `{os.environ.get('HEAD_SHA', '')}`",
+              f"- workflow_sha: `{os.environ.get('WORKFLOW_SHA', '')}`",
+              "",
+          ]
+          failed = []
+          for name in names:
+              path = results_dir / name
+              status, count, rules, note = "missing", "0", "", "no result file"
+              if path.is_file():
+                  parts = path.read_text(encoding="utf8").splitlines()
+                  status = parts[0] if parts else "missing"
+                  count = parts[1] if len(parts) > 1 else "0"
+                  rules = parts[2] if len(parts) > 2 else ""
+                  note = parts[3] if len(parts) > 3 else ""
+              extra = note or (f"rules: {rules}" if rules else "rules: none")
+              lines.append(f"- **{name}**: {status} (count {count}; {extra})")
+              if status in ("fail", "missing"):
+                  failed.append(name)
+          lines.append("")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if not summary:
+              raise SystemExit("GITHUB_STEP_SUMMARY is not set")
+          with Path(summary).open("a", encoding="utf8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          fail_on = os.environ.get("FAIL_ON_FINDINGS", "true")
+          if failed and fail_on != "false":
+              print(f"::error::security-scan failed: {', '.join(failed)}")
+              raise SystemExit(1)
+          PY
