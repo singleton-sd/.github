@@ -311,6 +311,193 @@ jobs:
             exit 1
           fi
 
+  security-scan-clean:
+    name: security-scan-clean
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
+    with:
+      working_directory: tests/fixtures/security-scan-clean
+      # Fixture job skips dependency review; YAML false is a bool and cannot
+      # be assigned to this string input, so the value is a string literal.
+      dependency_review: ${{ 'false' }} # zizmor: ignore[obfuscation]
+
+  # Negative fixtures must not call security-scan.yml as jobs: a failed
+  # reusable-workflow job is a red check on the PR. Same pattern as
+  # setup-pnpm-node-fail: run the contract check at step level and assert.
+  security-scan-fail:
+    name: security-scan-fail
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Tag-pinned checkout must fail
+        env:
+          ROOT: tests/fixtures/security-scan-tag-pinned
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(node scripts/check-caller-contract.mjs --root "${ROOT}" 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::tag-pinned fixture unexpectedly passed"
+            exit 1
+          fi
+          case "${out}" in
+            *unpinned-uses*) ;;
+            *)
+              echo "::error::tag-pinned fixture did not report unpinned-uses"
+              exit 1
+              ;;
+          esac
+          echo "OK tag-pinned failed with unpinned-uses"
+
+      - name: secrets inherit must fail
+        env:
+          ROOT: tests/fixtures/security-scan-secrets-inherit
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(node scripts/check-caller-contract.mjs --root "${ROOT}" 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::secrets-inherit fixture unexpectedly passed"
+            exit 1
+          fi
+          case "${out}" in
+            *secrets-inherit*) ;;
+            *)
+              echo "::error::secrets-inherit fixture did not report secrets-inherit"
+              exit 1
+              ;;
+          esac
+          echo "OK secrets-inherit failed with secrets-inherit"
+
+      - name: inline azure/login must fail
+        env:
+          ROOT: tests/fixtures/security-scan-azure-login
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(node scripts/check-caller-contract.mjs --root "${ROOT}" 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::azure-login fixture unexpectedly passed"
+            exit 1
+          fi
+          case "${out}" in
+            *inline-azure-login*) ;;
+            *)
+              echo "::error::azure-login fixture did not report inline-azure-login"
+              exit 1
+              ;;
+          esac
+          echo "OK azure-login failed with inline-azure-login"
+
+      - name: First-push range includes earlier secret commit
+        run: node --test scripts/gitleaks-log-opts.test.mjs
+
+      - name: Gitleaks adapter fails closed
+        run: node --test scripts/summarize-gitleaks.test.mjs
+
+      - name: Isolated python ignores caller yaml.py
+        run: node --test --test-name-pattern 'isolated python' scripts/check-caller-contract.test.mjs
+
+      - name: env uses is not an action reference
+        run: node --test --test-name-pattern 'schema positions' scripts/check-caller-contract.test.mjs
+
+  security-scan-gitleaks-runtime:
+    name: security-scan-gitleaks-runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSLf -o "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}" gitleaks
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Detect a runtime-built fake secret
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          prefix = "".join(["A", "K", "I", "A"])
+          body = "".join(["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P"])
+          path = Path(os.environ["RUNNER_TEMP"]) / "gitleaks-runtime-fixture.txt"
+          path.write_text(f"token={prefix}{body}\n", encoding="utf8")
+          PY
+          json="${RUNNER_TEMP}/gitleaks-runtime.json"
+          set +e
+          gitleaks detect --no-git --redact --no-banner --exit-code 1 \
+            --source "${RUNNER_TEMP}/gitleaks-runtime-fixture.txt" \
+            --report-format json --report-path "${json}" \
+            >/dev/null 2>&1
+          code=$?
+          set -e
+          python3 - "$code" "${json}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          code = int(sys.argv[1])
+          path = Path(sys.argv[2])
+          findings = []
+          if path.is_file() and path.read_text(encoding="utf8").strip():
+              loaded = json.loads(path.read_text(encoding="utf8"))
+              if isinstance(loaded, list):
+                  findings = loaded
+          rules = sorted(
+              {
+                  str(item.get("RuleID") or item.get("Rule") or "unknown")
+                  for item in findings
+                  if isinstance(item, dict)
+              }
+          )
+          if code not in (0, 1):
+              print(f"::error::gitleaks runtime test failed with exit {code}")
+              raise SystemExit(1)
+          if not findings:
+              print("::error::gitleaks did not report the runtime-built fixture")
+              raise SystemExit(1)
+          print(f"gitleaks runtime: {len(findings)} finding(s); rules: {', '.join(rules)}")
+          PY
+          rm -f "${RUNNER_TEMP}/gitleaks-runtime-fixture.txt" "${json}"
+
   self-test:
     name: self-test
     if: always()
@@ -324,6 +511,9 @@ jobs:
         setup-pnpm-node-cache-false,
         setup-pnpm-node-workspace,
         setup-pnpm-node-fail,
+        security-scan-clean,
+        security-scan-fail,
+        security-scan-gitleaks-runtime,
       ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -340,10 +530,13 @@ jobs:
           SETUP_CACHE_FALSE: ${{ needs.setup-pnpm-node-cache-false.result }}
           SETUP_WORKSPACE: ${{ needs.setup-pnpm-node-workspace.result }}
           SETUP_FAIL: ${{ needs.setup-pnpm-node-fail.result }}
+          SCAN_CLEAN: ${{ needs.security-scan-clean.result }}
+          SCAN_FAIL: ${{ needs.security-scan-fail.result }}
+          SCAN_GITLEAKS: ${{ needs.security-scan-gitleaks-runtime.result }}
         run: |
           set -euo pipefail
           failed=0
-          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}"; do
+          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-fail:${SCAN_FAIL}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             if [ "$result" != success ]; then

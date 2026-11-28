@@ -1,0 +1,18 @@
+# Fixture: all third-party uses SHA-pinned; security-scan must pass.
+name: ci
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
