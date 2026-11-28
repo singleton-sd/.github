@@ -167,6 +167,48 @@ jobs:
 EOF
 expect_fail "$BAD" "creds" "azure/login creds input"
 
+# .yaml workflow extension
+BAD="$WORKDIR/bad-yaml-workflow"
+write_tree "$BAD"
+cat >"$BAD/.github/workflows/ok.yml" <<'EOF'
+name: ok
+on: push
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
+EOF
+cat >"$BAD/.github/workflows/bad.yaml" <<'EOF'
+name: bad
+on: push
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
+        with:
+          creds: ${{ secrets.AZURE_CREDS_JSON }}
+EOF
+expect_fail "$BAD" "creds" ".yaml workflow creds input"
+
+# action.yaml extension
+BAD="$WORKDIR/bad-action-yaml"
+write_tree "$BAD"
+cat >"$BAD/actions/sample/action.yaml" <<'EOF'
+name: bad
+description: uses a client secret
+runs:
+  using: composite
+  steps:
+    - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
+      with:
+        client-id: example-client-id
+        tenant-id: example-tenant-id
+        client-secret: example
+EOF
+expect_fail "$BAD" "client-secret" "action.yaml client-secret key"
+
 # This repository must pass.
 got="$(run_policy "$ROOT" "$OUT")"
 if [ "$got" -ne 0 ]; then

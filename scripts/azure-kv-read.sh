@@ -42,15 +42,22 @@ validate_secret_name() {
   fi
 }
 
+# GitHub workflow-command data encoding (% first, then CR, then LF).
+encode_workflow_data() {
+  printf '%s' "$1" | python3 -c 'import sys; s=sys.stdin.read(); sys.stdout.write(s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))'
+}
+
 mask_secret() {
   local value="$1"
-  local line
-  if [ -n "$value" ]; then
-    printf '::add-mask::%s\n' "$value"
+  local encoded line
+  encoded="$(encode_workflow_data "$value")"
+  if [ -n "$encoded" ]; then
+    printf '::add-mask::%s\n' "$encoded"
   fi
   while IFS= read -r line || [ -n "$line" ]; do
     if [ -n "$line" ]; then
-      printf '::add-mask::%s\n' "$line"
+      encoded="$(encode_workflow_data "$line")"
+      printf '::add-mask::%s\n' "$encoded"
     fi
   done <<< "$value"
 }
@@ -104,12 +111,20 @@ for i in "${!env_names[@]}"; do
   env_name="${env_names[$i]}"
   secret_name="${secret_names[$i]}"
   set +e
-  value="$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$secret_name" --query value -o tsv)"
+  json_out="$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$secret_name" --query value -o json)"
   status=$?
   set -e
   if [ "$status" -ne 0 ]; then
     fail "Failed to read Key Vault secret '${secret_name}' from vault '${KEY_VAULT_NAME}'."
   fi
+  set +e
+  value="$(printf '%s' "$json_out" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)); sys.stdout.write("x")')"
+  decode_status=$?
+  set -e
+  if [ "$decode_status" -ne 0 ]; then
+    fail "Failed to decode Key Vault secret '${secret_name}' from vault '${KEY_VAULT_NAME}'."
+  fi
+  value="${value%x}"
   mask_secret "$value"
   if [ -z "$value" ]; then
     fail "Key Vault secret '${secret_name}' in vault '${KEY_VAULT_NAME}' is empty."

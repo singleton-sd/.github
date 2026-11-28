@@ -19,12 +19,21 @@ errors = []
 
 def collect_files():
     files = []
-    files.extend(sorted((ROOT / ".github" / "workflows").glob("*.yml")))
-    files.extend(sorted((ROOT / "workflow-templates").glob("*.yml")))
+    for pattern in ("*.yml", "*.yaml"):
+        files.extend(sorted((ROOT / ".github" / "workflows").glob(pattern)))
+        files.extend(sorted((ROOT / "workflow-templates").glob(pattern)))
     actions = ROOT / "actions"
     if actions.is_dir():
         files.extend(sorted(actions.glob("**/action.yml")))
-    return files
+        files.extend(sorted(actions.glob("**/action.yaml")))
+    seen = set()
+    unique = []
+    for path in files:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique.append(path)
+    return unique
 
 
 def walk_forbidden(node, path):
