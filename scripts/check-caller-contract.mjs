@@ -9,6 +9,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -29,14 +30,17 @@ export function loadYaml(text) {
   const proc = spawnSync(
     "python3",
     [
+      "-I",
       "-c",
       "import json,sys,yaml; json.dump(yaml.safe_load(sys.stdin), sys.stdout)",
     ],
-    { input: text, encoding: "utf8" },
+    { input: text, encoding: "utf8", cwd: tmpdir() },
   );
   if (proc.status !== 0) {
-    const err = (proc.stderr || proc.stdout || "yaml parse failed").trim();
-    throw new Error(err);
+    const lineMatch = /line (\d+)/.exec(proc.stderr || "");
+    const error = new Error("YAML parse error");
+    error.line = lineMatch ? Number(lineMatch[1]) : 0;
+    throw error;
   }
   if (!proc.stdout) {
     return null;
@@ -82,21 +86,6 @@ export function listCallerWorkflowFiles(root) {
     ...listYaml(join(root, ".github", "workflows")),
     ...listYaml(join(root, "workflow-templates")),
   ];
-}
-
-function walk(node, visit) {
-  visit(node);
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      walk(item, visit);
-    }
-    return;
-  }
-  if (node && typeof node === "object") {
-    for (const value of Object.values(node)) {
-      walk(value, visit);
-    }
-  }
 }
 
 function repoOfUses(uses) {
@@ -149,59 +138,80 @@ function collectFindings(rel, loaded, banned, enforceBannedSteps) {
   const errors = [];
   const warnings = [];
 
-  walk(loaded, (node) => {
-    if (!node || typeof node !== "object" || Array.isArray(node)) {
-      return;
+  function checkUses(uses) {
+    const classified = classifyUses(uses);
+    if (!classified.ok) {
+      errors.push({
+        rule: "unpinned-uses",
+        message: `${rel}: ${classified.reason}`,
+      });
     }
-    if (node.secrets === "inherit") {
+    for (const entry of banned) {
+      const hitUses = entry.usesContains.some((needle) =>
+        usesContainsNeedle(uses, needle),
+      );
+      if (!hitUses) {
+        continue;
+      }
+      const finding = {
+        rule: entry.id,
+        message: `${rel}: banned step ${entry.id}; use ${entry.replacement}`,
+      };
+      if (entry.enforce && enforceBannedSteps) {
+        errors.push(finding);
+      } else {
+        warnings.push(finding);
+      }
+    }
+  }
+
+  function checkRun(run) {
+    for (const entry of banned) {
+      if (!entry.runPattern || !entry.runPattern.test(run)) {
+        continue;
+      }
+      const finding = {
+        rule: entry.id,
+        message: `${rel}: banned step ${entry.id}; use ${entry.replacement}`,
+      };
+      if (entry.enforce && enforceBannedSteps) {
+        errors.push(finding);
+      } else {
+        warnings.push(finding);
+      }
+    }
+  }
+
+  const jobs =
+    loaded.jobs && typeof loaded.jobs === "object" && !Array.isArray(loaded.jobs)
+      ? loaded.jobs
+      : {};
+  for (const job of Object.values(jobs)) {
+    if (!job || typeof job !== "object" || Array.isArray(job)) {
+      continue;
+    }
+    if (typeof job.uses === "string") {
+      checkUses(job.uses);
+    }
+    if (job.secrets === "inherit") {
       errors.push({
         rule: "secrets-inherit",
         message: `${rel}: secrets: inherit is forbidden`,
       });
     }
-    if (typeof node.uses === "string") {
-      const classified = classifyUses(node.uses);
-      if (!classified.ok) {
-        errors.push({
-          rule: "unpinned-uses",
-          message: `${rel}: ${classified.reason}`,
-        });
+    const steps = Array.isArray(job.steps) ? job.steps : [];
+    for (const step of steps) {
+      if (!step || typeof step !== "object" || Array.isArray(step)) {
+        continue;
       }
-      for (const entry of banned) {
-        const hitUses = entry.usesContains.some((needle) =>
-          usesContainsNeedle(node.uses, needle),
-        );
-        if (!hitUses) {
-          continue;
-        }
-        const finding = {
-          rule: entry.id,
-          message: `${rel}: banned step ${entry.id}; use ${entry.replacement}`,
-        };
-        if (entry.enforce && enforceBannedSteps) {
-          errors.push(finding);
-        } else {
-          warnings.push(finding);
-        }
+      if (typeof step.uses === "string") {
+        checkUses(step.uses);
+      }
+      if (typeof step.run === "string") {
+        checkRun(step.run);
       }
     }
-    if (typeof node.run === "string") {
-      for (const entry of banned) {
-        if (!entry.runPattern || !entry.runPattern.test(node.run)) {
-          continue;
-        }
-        const finding = {
-          rule: entry.id,
-          message: `${rel}: banned step ${entry.id}; use ${entry.replacement}`,
-        };
-        if (entry.enforce && enforceBannedSteps) {
-          errors.push(finding);
-        } else {
-          warnings.push(finding);
-        }
-      }
-    }
-  });
+  }
 
   return { errors, warnings };
 }
@@ -228,9 +238,12 @@ export function checkCallerContract(root, options = {}) {
     try {
       loaded = loadYaml(raw);
     } catch (err) {
+      const line = err && typeof err.line === "number" && err.line > 0 ? err.line : 0;
       errors.push({
         rule: "yaml-parse",
-        message: `${rel}: YAML parse error: ${err.message}`,
+        message: line
+          ? `YAML parse error in ${rel} at line ${line}`
+          : `YAML parse error in ${rel}`,
       });
       continue;
     }

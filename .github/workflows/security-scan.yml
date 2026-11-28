@@ -92,6 +92,10 @@ jobs:
 
           echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
           mkdir -p "${RUNNER_TEMP}/security-scan-results"
+          if ! python3 -I -c "import yaml" >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq python3-yaml
+          fi
 
       - name: Resolve scan root
         id: root
@@ -99,7 +103,7 @@ jobs:
           WORKING_DIRECTORY: ${{ inputs.working_directory }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          python3 -I - <<'PY'
           import os
           from pathlib import Path
 
@@ -128,41 +132,15 @@ jobs:
             printf '%s\n' "fail" "0" "no-workflows" "no workflow files" >"${results}"
             exit 0
           fi
+          fmt="$(printf '{{%s .}}' json)"
           set +e
-          actionlint -color "${files[@]}" >"${RUNNER_TEMP}/actionlint.out" 2>&1
+          actionlint -format "${fmt}" "${files[@]}" \
+            >"${RUNNER_TEMP}/actionlint.out" 2>"${RUNNER_TEMP}/actionlint.err"
           code=$?
           set -e
-          # Counts and file names only; drop source snippets after the first colon group.
-          python3 - "$code" "${RUNNER_TEMP}/actionlint.out" "${results}" <<'PY'
-          import sys
-          from pathlib import Path
-
-          code = int(sys.argv[1])
-          output = Path(sys.argv[2]).read_text(encoding="utf8", errors="replace")
-          dest = Path(sys.argv[3])
-          lines = [line for line in output.splitlines() if line.strip()]
-          if code == 0:
-              dest.write_text("pass\n0\n\n\n", encoding="utf8")
-              print("actionlint: 0 error(s)")
-              raise SystemExit(0)
-          if code != 1:
-              print(f"::error::actionlint failed with exit {code}")
-              Path(sys.argv[2]).write_text(output, encoding="utf8")
-              raise SystemExit(1)
-          rules = []
-          for line in lines:
-              parts = line.split(":", 4)
-              if len(parts) >= 4:
-                  rules.append(parts[3].strip().split()[0] if parts[3].strip() else "error")
-              else:
-                  rules.append("error")
-          unique = sorted(set(rules))
-          dest.write_text(
-              f"fail\n{len(lines)}\n{','.join(unique)}\n\n",
-              encoding="utf8",
-          )
-          print(f"actionlint: {len(lines)} error(s); rules: {', '.join(unique) or 'none'}")
-          PY
+          node .github-workflows-src/scripts/summarize-actionlint.mjs \
+            "${code}" "${RUNNER_TEMP}/actionlint.out" "${results}"
+          rm -f "${RUNNER_TEMP}/actionlint.out" "${RUNNER_TEMP}/actionlint.err"
 
       - name: zizmor
         env:
@@ -171,7 +149,7 @@ jobs:
           set -euo pipefail
           results="${RUNNER_TEMP}/security-scan-results/zizmor"
           config="${RUNNER_TEMP}/zizmor-caller.yml"
-          python3 - <<'PY'
+          python3 -I - <<'PY'
           import os
           from pathlib import Path
 
@@ -195,7 +173,7 @@ jobs:
             "${targets[@]}" >"${json}" 2>"${RUNNER_TEMP}/zizmor.err"
           code=$?
           set -e
-          python3 - "$code" "${json}" "${results}" "${RUNNER_TEMP}/zizmor.err" <<'PY'
+          python3 -I - "$code" "${json}" "${results}" "${RUNNER_TEMP}/zizmor.err" <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -259,59 +237,16 @@ jobs:
           set -euo pipefail
           results="${RUNNER_TEMP}/security-scan-results/gitleaks"
           json="${RUNNER_TEMP}/gitleaks.json"
-          range=""
-          if [ "${EVENT_NAME}" = pull_request ] && [ -n "${PR_BASE:-}" ] && [ -n "${PR_HEAD:-}" ]; then
-            range="${PR_BASE}..${PR_HEAD}"
-          elif [ -n "${PUSH_BEFORE:-}" ] && [ "${PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ] && [ -n "${PUSH_AFTER:-}" ]; then
-            range="${PUSH_BEFORE}..${PUSH_AFTER}"
-          else
-            range="-1"
-          fi
+          range="$(node .github-workflows-src/scripts/gitleaks-log-opts.mjs)"
           set +e
           gitleaks detect --source "${GITHUB_WORKSPACE}" --log-opts="${range}" \
-            --redact --no-banner --exit-code 1 \
+            --redact --no-banner --exit-code 2 \
             --report-format json --report-path "${json}" \
             >"${RUNNER_TEMP}/gitleaks.out" 2>&1
           code=$?
           set -e
-          python3 - "$code" "${json}" "${results}" "${RUNNER_TEMP}/gitleaks.out" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          code = int(sys.argv[1])
-          json_path = Path(sys.argv[2])
-          dest = Path(sys.argv[3])
-          log = Path(sys.argv[4]).read_text(encoding="utf8", errors="replace")
-          if code not in (0, 1):
-              # Tool failure: log redacted stdout only, never a findings file.
-              for line in log.splitlines():
-                  if "secret" in line.lower() or "leak" in line.lower():
-                      continue
-                  print(line)
-              print(f"::error::gitleaks failed with exit {code}")
-              raise SystemExit(1)
-          findings = []
-          if json_path.is_file():
-              raw = json_path.read_text(encoding="utf8")
-              if raw.strip():
-                  loaded = json.loads(raw)
-                  if isinstance(loaded, list):
-                      findings = loaded
-          rules = sorted(
-              {
-                  str(item.get("RuleID") or item.get("Rule") or "unknown")
-                  for item in findings
-                  if isinstance(item, dict)
-              }
-          )
-          status = "fail" if findings else "pass"
-          dest.write_text(
-              f"{status}\n{len(findings)}\n{','.join(rules)}\n\n",
-              encoding="utf8",
-          )
-          print(f"gitleaks: {len(findings)} finding(s); rules: {', '.join(rules) or 'none'}")
-          PY
+          node .github-workflows-src/scripts/summarize-gitleaks.mjs \
+            "${code}" "${json}" "${results}"
           rm -f "${json}" "${RUNNER_TEMP}/gitleaks.out"
 
       - name: Decide dependency review
@@ -389,7 +324,7 @@ jobs:
             --json-out "${json}"
           code=$?
           set -e
-          python3 - "$code" "${json}" "${results}" <<'PY'
+          python3 -I - "$code" "${json}" "${results}" <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -428,7 +363,7 @@ jobs:
           FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          python3 -I - <<'PY'
           import os
           from pathlib import Path
 

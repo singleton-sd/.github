@@ -258,6 +258,87 @@ test("CLI exits 1 on tag-pinned caller and 0 on clean", () => {
   assert.match(passed.stdout, /check-caller-contract: passed/);
 });
 
+test("isolated python ignores caller yaml.py", () => {
+  const root = tempRoot();
+  write(root, "yaml.py", "raise SystemExit('hijacked-yaml-import')\n");
+  write(
+    root,
+    ".github/workflows/ci.yml",
+    workflow(`  security:
+    uses: singleton-sd/.github/.github/workflows/security-scan.yml@v1
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ${PIN}
+`),
+  );
+  const previous = process.cwd();
+  process.chdir(root);
+  try {
+    const result = checkCallerContract(root);
+    assert.equal(result.errors.length, 0, result.errors.map((item) => item.message).join("\n"));
+  } finally {
+    process.chdir(previous);
+  }
+});
+
+test("schema positions: env uses passes and unpinned step fails", () => {
+  const envOnly = tempRoot();
+  write(
+    envOnly,
+    ".github/workflows/ci.yml",
+    workflow(`  ci:
+    runs-on: ubuntu-latest
+    env:
+      uses: production
+    steps:
+      - uses: ${PIN}
+`),
+  );
+  const envResult = checkCallerContract(envOnly);
+  assert.equal(
+    envResult.errors.length,
+    0,
+    envResult.errors.map((item) => item.message).join("\n"),
+  );
+
+  const unpinned = tempRoot();
+  write(
+    unpinned,
+    ".github/workflows/ci.yml",
+    workflow(`  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`),
+  );
+  const unpinnedResult = checkCallerContract(unpinned);
+  assert.ok(unpinnedResult.errors.some((item) => item.rule === "unpinned-uses"));
+});
+
+test("malformed YAML does not leak source into CLI output", () => {
+  const marker = "UNIQUE_SENSITIVE_MARKER_9f3a";
+  const root = tempRoot();
+  write(
+    root,
+    ".github/workflows/ci.yml",
+    `name: ci
+on: pull_request
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${marker}
+      BROKEN: ]
+`,
+  );
+  const failed = spawnSync(process.execPath, [script, "--root", root], { encoding: "utf8" });
+  assert.equal(failed.status, 1, failed.stderr);
+  assert.doesNotMatch(failed.stdout || "", new RegExp(marker));
+  assert.doesNotMatch(failed.stderr || "", new RegExp(marker));
+  assert.match(`${failed.stdout}\n${failed.stderr}`, /YAML parse error in /);
+});
+
 test("main() --help exits 0", () => {
   assert.equal(main(["--help"]), 0);
 });

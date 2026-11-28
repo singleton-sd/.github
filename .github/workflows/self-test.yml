@@ -412,6 +412,18 @@ jobs:
           esac
           echo "OK azure-login failed with inline-azure-login"
 
+      - name: First-push range includes earlier secret commit
+        run: node --test scripts/gitleaks-log-opts.test.mjs
+
+      - name: Gitleaks adapter fails closed
+        run: node --test scripts/summarize-gitleaks.test.mjs
+
+      - name: Isolated python ignores caller yaml.py
+        run: node --test --test-name-pattern 'isolated python' scripts/check-caller-contract.test.mjs
+
+      - name: env uses is not an action reference
+        run: node --test --test-name-pattern 'schema positions' scripts/check-caller-contract.test.mjs
+
   security-scan-gitleaks-runtime:
     name: security-scan-gitleaks-runtime
     runs-on: ubuntu-latest
