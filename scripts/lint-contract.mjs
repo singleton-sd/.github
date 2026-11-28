@@ -140,10 +140,6 @@ function isLocalUses(uses) {
   return uses.startsWith("./") || uses.startsWith("docker://");
 }
 
-function isSelfRepositoryUses(uses) {
-  return String(uses).startsWith("singleton-sd/.github/");
-}
-
 function isSelfWorkflowName(name, rel) {
   const base = rel.split("/").pop() || "";
   if (base.startsWith("self-")) {
@@ -287,7 +283,14 @@ export function lockKeyForPin(pin) {
   if (!match) {
     return pin.uses.toLowerCase();
   }
-  return `${match[1].toLowerCase()}@${match[2].toLowerCase()}`;
+  const name = match[1];
+  const sha = match[2].toLowerCase();
+  // GitHub's native lockfile keys same-repo composites as owner/repo@sha,
+  // not owner/repo/actions/<name>@sha. A path-form key is Invalid lockfile.
+  if (/^singleton-sd\/\.github\/actions\//i.test(name)) {
+    return `singleton-sd/.github@${sha}`;
+  }
+  return `${name.toLowerCase()}@${sha}`;
 }
 
 function isCompositeActionRel(rel) {
@@ -307,8 +310,16 @@ export function compositePinMismatchMessage(rel, action, actionSha, lockSha) {
   return `${rel}: ${action} pin ${actionSha} does not match ${LOCK_REL} ${lockSha}`;
 }
 
+function lockKeyPrefixForAction(actionName) {
+  const name = String(actionName).toLowerCase();
+  if (/^singleton-sd\/\.github\/actions\//i.test(name)) {
+    return "singleton-sd/.github@";
+  }
+  return `${name}@`;
+}
+
 function lockDependenciesForAction(dependencies, actionName) {
-  const prefix = `${String(actionName).toLowerCase()}@`;
+  const prefix = lockKeyPrefixForAction(actionName);
   const found = [];
   if (!dependencies || typeof dependencies !== "object") {
     return found;
@@ -404,16 +415,9 @@ export function formatLock(pins, existingText = "") {
     }
   }
   const dependencies = { ...existingDeps };
-  for (const key of Object.keys(dependencies)) {
-    if (isSelfRepositoryUses(key)) {
-      delete dependencies[key];
-    }
-  }
   const workflowSets = {};
   for (const [rel, list] of Object.entries(existingWorkflows)) {
-    workflowSets[rel] = new Set(
-      (Array.isArray(list) ? list : []).filter((key) => !isSelfRepositoryUses(key)),
-    );
+    workflowSets[rel] = new Set(Array.isArray(list) ? list : []);
   }
   for (const pin of pins) {
     const key = lockKeyForPin(pin);
@@ -541,12 +545,6 @@ export function collectThirdPartyPins(root) {
       }
       if (!pin.version) {
         errors.push(`${rel}: uses: ${pin.uses} is missing a # vX.Y.Z comment`);
-        continue;
-      }
-      // GitHub's native actions.lock validator rejects same-repo pins
-      // (`singleton-sd/.github/actions/...@sha`), so they stay SHA-pinned
-      // in YAML only and are not recorded in the lock.
-      if (isSelfRepositoryUses(pin.uses)) {
         continue;
       }
       pins.push({ ...pin, from: rel });

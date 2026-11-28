@@ -416,20 +416,51 @@ test("self-release is not required to have working_directory or dry_run", () => 
   );
 });
 
-test("same-repo SHA pins are allowed without a lock entry", () => {
+test("same-repo action SHA pins lock as owner/repo@sha", () => {
   const root = tempRoot();
   passingTree(root);
+  const sha = "0e40c2d9fb4139c8715aeae28de50a417e7b72df";
   writeCompositePin(
     root,
-    "singleton-sd/.github/actions/azure-oidc-login@0e40c2d9fb4139c8715aeae28de50a417e7b72df # v1.0.6",
+    `singleton-sd/.github/actions/azure-oidc-login@${sha} # v1.0.6`,
   );
   const result = lintRepo(root, { writeLock: true });
   assert.equal(result.errors.join("\n"), "");
   const lock = parseLock(result.lock);
+  const key = `singleton-sd/.github@${sha}`;
+  assert.ok(lock.dependencies[key], result.lock);
+  assert.equal(lock.dependencies[key].ref, "v1.0.6");
   assert.equal(
-    Object.keys(lock.dependencies).some((key) => key.startsWith("singleton-sd/.github/")),
+    Object.keys(lock.dependencies).some((item) => item.includes("/actions/azure-oidc-login@")),
     false,
     result.lock,
+  );
+});
+
+test("same-repo action pin that disagrees with owner/repo lock key fails", () => {
+  const root = tempRoot();
+  passingTree(root);
+  const oldSha = "0e40c2d9fb4139c8715aeae28de50a417e7b72df";
+  const newSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  writeCompositePin(
+    root,
+    `singleton-sd/.github/actions/azure-oidc-login@${oldSha} # v1.0.6`,
+  );
+  const generated = lintRepo(root, { writeLock: true });
+  assert.equal(generated.errors.join("\n"), "");
+  write(root, ".github/workflows/actions.lock", generated.lock);
+  writeCompositePin(
+    root,
+    `singleton-sd/.github/actions/azure-oidc-login@${newSha} # v1.0.7`,
+  );
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) =>
+      error.includes("actions/azure-oidc-login/action.yml") &&
+      error.includes(newSha) &&
+      error.includes(oldSha),
+    ),
+    result.errors.join("\n"),
   );
 });
 

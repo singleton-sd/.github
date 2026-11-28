@@ -42,9 +42,8 @@ uses the local `./.github/workflows/<file>.yml` path.
   this repository's composites check out `${{ job.workflow_repository }}` at
   `${{ job.workflow_sha }}` into `.github-workflows-src` (see `pages-smoke.yml`).
   Nested login from `actions/app-config-read` is SHA-pinned
-  `singleton-sd/.github/actions/azure-oidc-login`. GitHub's native
-  `actions.lock` validator rejects same-repo pins, so those SHA pins stay
-  in YAML only.
+  `singleton-sd/.github/actions/azure-oidc-login@<sha>`. GitHub's native
+  lockfile keys that as `singleton-sd/.github@<sha>` (not the action path).
 
   Pins used only inside `actions/*/action.yml` (today `azure/login` in
   `actions/azure-oidc-login`) are recorded in `actions.lock` by
