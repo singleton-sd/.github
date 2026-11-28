@@ -8,7 +8,10 @@ Shared composite action that installs **one** pnpm and Node policy:
 
 There is **no `version` input** and no other way to override pnpm or Node.
 A repo changes versions by editing `package.json` or `.nvmrc`, never a
-workflow. The pnpm store cache is on by default.
+workflow. Nested `pnpm/action-setup` is also called with no `version:`
+input. If `devEngines.packageManager` names pnpm at a different version
+than `packageManager`, the action fails rather than installing the
+`devEngines` version. The pnpm store cache is on by default.
 
 ## Caller example
 
@@ -36,7 +39,7 @@ uses the local `./actions/setup-pnpm-node` path.
 | Input | Required | Default | Notes |
 | --- | --- | --- | --- |
 | `working_directory` | no | `.` | Package directory relative to the repository root |
-| `cache` | no | `true` | pnpm store cache through `actions/setup-node` `cache: pnpm` |
+| `cache` | no | `true` | pnpm store cache through `actions/setup-node` `cache: pnpm`. When false, also sets `package-manager-cache: false` so setup-node does not auto-cache from a root npm `package.json`. Cache looks for `pnpm-lock.yaml` in `working_directory`, then parent directories up to the workspace root. |
 | `node_version_file` | no | `.nvmrc` | Relative to `working_directory`. Used when the file exists |
 | `version` | do not set | empty | Forbidden. The action fails if this is set |
 

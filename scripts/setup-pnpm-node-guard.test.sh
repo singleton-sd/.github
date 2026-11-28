@@ -67,7 +67,7 @@ echo "OK rejects yarn@4"
 valid="$WORKDIR/valid"
 write_pkg "$valid" '{ "name": "valid", "private": true, "packageManager": "pnpm@10.33.4" }'
 out="$(assert_exit 0 "valid pnpm@10.33.4" WORKING_DIRECTORY="$valid")"
-grep -q "Resolved pnpm version: 10.33.4" "$out" || {
+grep -Fxq "Resolved pnpm version: 10.33.4" "$out" || {
   echo "FAIL: expected resolved pnpm 10.33.4"
   cat "$out"
   exit 1
@@ -78,12 +78,39 @@ echo "OK accepts pnpm@10.33.4"
 hashed="$WORKDIR/hashed"
 write_pkg "$hashed" '{ "name": "hashed", "private": true, "packageManager": "pnpm@10.33.4+sha512.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }'
 out="$(assert_exit 0 "valid pnpm with sha512 suffix" WORKING_DIRECTORY="$hashed")"
-grep -q "Resolved pnpm version: 10.33.4" "$out" || {
-  echo "FAIL: expected resolved pnpm 10.33.4 with +sha512 suffix"
+grep -Fxq "Resolved pnpm version: 10.33.4" "$out" || {
+  echo "FAIL: expected resolved pnpm 10.33.4 with +sha512 suffix stripped"
   cat "$out"
   exit 1
 }
 rm -f "$out"
 echo "OK accepts pnpm@10.33.4+sha512"
+
+conflict="$WORKDIR/conflict"
+write_pkg "$conflict" '{ "name": "conflict", "private": true, "packageManager": "pnpm@10.33.4", "devEngines": { "packageManager": { "name": "pnpm", "version": "9.15.0" } } }'
+out="$(assert_exit 1 "conflicting devEngines pnpm 9.15.0" WORKING_DIRECTORY="$conflict")"
+grep -q "devEngines.packageManager.version conflicts" "$out" || {
+  echo "FAIL: expected conflict error for packageManager 10.33.4 vs devEngines 9.15.0"
+  cat "$out"
+  exit 1
+}
+grep -q "9.15.0" "$out" || {
+  echo "FAIL: expected 9.15.0 in conflict error"
+  cat "$out"
+  exit 1
+}
+rm -f "$out"
+echo "OK rejects packageManager vs devEngines conflict"
+
+aligned="$WORKDIR/aligned"
+write_pkg "$aligned" '{ "name": "aligned", "private": true, "packageManager": "pnpm@10.33.4", "devEngines": { "packageManager": { "name": "pnpm", "version": "10.33.4" } } }'
+out="$(assert_exit 0 "aligned devEngines pnpm 10.33.4" WORKING_DIRECTORY="$aligned")"
+grep -Fxq "Resolved pnpm version: 10.33.4" "$out" || {
+  echo "FAIL: expected resolved pnpm 10.33.4 when devEngines matches"
+  cat "$out"
+  exit 1
+}
+rm -f "$out"
+echo "OK accepts matching packageManager and devEngines"
 
 echo "setup-pnpm-node-guard: all cases passed"

@@ -13,7 +13,7 @@ Callers pin `@v1`. There is no `version` input and no other override.
 | Input | Default | Notes |
 | --- | --- | --- |
 | `working_directory` | `.` | Package directory relative to the repository root |
-| `cache` | `true` | pnpm store cache via `actions/setup-node` |
+| `cache` | `true` | pnpm store cache via `actions/setup-node`. False also disables setup-node auto-cache. |
 | `node_version_file` | `.nvmrc` | Relative to `working_directory` |
 | `version` | empty | Forbidden. The action fails if this is set |
 

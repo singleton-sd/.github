@@ -71,6 +71,7 @@ runs:
       env:
         WORKING_DIRECTORY: ${{ inputs.working_directory }}
         NODE_VERSION_FILE: ${{ inputs.node_version_file }}
+        CACHE: ${{ inputs.cache }}
       run: |
         set -euo pipefail
         workdir="${WORKING_DIRECTORY:-.}"
@@ -81,7 +82,39 @@ runs:
         nvmrc_name="${NODE_VERSION_FILE:-.nvmrc}"
         nvmrc_path="${workdir}/${nvmrc_name}"
         package_json="${workdir}/package.json"
-        lockfile="${workdir}/pnpm-lock.yaml"
+        if [ ! -d "$workdir" ]; then
+          echo "::error::working_directory ${workdir} does not exist."
+          exit 1
+        fi
+        workdir_abs="$(cd "$workdir" && pwd)"
+        workspace_root="$(pwd)"
+        if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -d "${GITHUB_WORKSPACE}" ]; then
+          workspace_root="$(cd "${GITHUB_WORKSPACE}" && pwd)"
+        fi
+        lockfile=""
+        search_abs="$workdir_abs"
+        while true; do
+          if [ -f "${search_abs}/pnpm-lock.yaml" ]; then
+            if [ "$search_abs" = "$workspace_root" ]; then
+              lockfile="pnpm-lock.yaml"
+            else
+              lockfile="${search_abs#"${workspace_root}"/}/pnpm-lock.yaml"
+            fi
+            break
+          fi
+          if [ "$search_abs" = "$workspace_root" ]; then
+            break
+          fi
+          parent="$(dirname "$search_abs")"
+          if [ "$parent" = "$search_abs" ]; then
+            break
+          fi
+          search_abs="$parent"
+        done
+        if [ "${CACHE}" = "true" ] && [ -z "$lockfile" ]; then
+          echo "::error::No pnpm-lock.yaml found in ${workdir} or a parent directory up to the workspace root. Needed for the pnpm store cache. Set cache to false to skip caching."
+          exit 1
+        fi
         action_root="$(cd "${GITHUB_ACTION_PATH}" && pwd)"
         repo_root="$(cd "${action_root}/../.." && pwd)"
         versions="${repo_root}/docs/versions.md"
@@ -137,6 +170,7 @@ runs:
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version-file: ${{ steps.resolve.outputs.node-version-file }}
+        package-manager-cache: false
 
     - name: Set up Node.js from docs default (cache)
       if: ${{ steps.resolve.outputs.node-source == 'default' && inputs.cache == 'true' }}
@@ -151,6 +185,7 @@ runs:
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ steps.resolve.outputs.node-version }}
+        package-manager-cache: false
 
     - name: Record resolved Node version
       id: record-node
