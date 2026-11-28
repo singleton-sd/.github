@@ -15,7 +15,6 @@ jobs:
     name: pages-build
     permissions:
       contents: read
-      id-token: write
     uses: ./.github/workflows/pages-build.yml # zizmor: ignore[self-repository]
     with:
       working_directory: tests/fixtures/pages-astro
@@ -778,6 +777,21 @@ jobs:
           fi
 
   # Never runs. Satisfies the reusable-workflow self-test caller contract.
+  # GitHub validates nested-job permissions at parse time, so this job
+  # (not pages-build) is the one that grants id-token: write.
+  pages-build-app-config:
+    name: pages-build-app-config
+    if: ${{ github.run_attempt == 0 }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pages-build-app-config.yml # zizmor: ignore[self-repository]
+    with:
+      working_directory: tests/fixtures/pages-astro
+      artifact_name: self-test-pages-app-config-dist
+      run_a11y: false
+
+  # Never runs. Satisfies the reusable-workflow self-test caller contract.
   # The composite is exercised below with an az stub (no Azure).
   config-read:
     name: config-read
@@ -806,6 +820,16 @@ jobs:
       - name: Lock nested Azure OIDC login pin
         if: ${{ github.run_attempt == 0 }}
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: 00000000-0000-0000-0000-000000000000
+          tenant-id: 00000000-0000-0000-0000-000000000000
+          subscription-id: 00000000-0000-0000-0000-000000000000
+
+      # Never runs. Records the SHA-pinned nested azure-oidc-login used by
+      # actions/app-config-read (local ./ would resolve in the caller).
+      - name: Lock nested azure-oidc-login pin
+        if: ${{ github.run_attempt == 0 }}
+        uses: singleton-sd/.github/actions/azure-oidc-login@0e40c2d9fb4139c8715aeae28de50a417e7b72df # v1.0.6
         with:
           client-id: 00000000-0000-0000-0000-000000000000
           tenant-id: 00000000-0000-0000-0000-000000000000
@@ -857,6 +881,81 @@ jobs:
             exit 1
           fi
           echo "OK app-config-read applied ${GOT_COUNT} keys"
+
+  # Caller-style workspace: the composite lives only under a side-path
+  # checkout, matching reusable workflows that resolve ./ against the caller.
+  app-config-read-caller-context:
+    name: app-config-read-caller-context
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out this repository as a side path
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: .github-workflows-src
+
+      - name: Assert caller workspace has no ./actions/app-config-read
+        run: |
+          set -euo pipefail
+          if [ -e actions/app-config-read ]; then
+            echo "::error::workspace root still has ./actions/app-config-read (not a caller-style layout)"
+            exit 1
+          fi
+          if [ ! -f .github-workflows-src/actions/app-config-read/action.yml ]; then
+            echo "::error::side-path composite is missing"
+            exit 1
+          fi
+          echo "OK caller-style workspace: action only under .github-workflows-src"
+
+      - name: Install az stub
+        env:
+          FIXTURE: .github-workflows-src/tests/fixtures/app-config/happy-path.json
+        run: |
+          set -euo pipefail
+          stub_dir="${RUNNER_TEMP}/app-config-az-stub"
+          mkdir -p "$stub_dir"
+          cp .github-workflows-src/tests/fixtures/app-config/az-stub.sh "${stub_dir}/az"
+          chmod +x "${stub_dir}/az"
+          echo "$stub_dir" >> "$GITHUB_PATH"
+          echo "APP_CONFIG_FIXTURE=${GITHUB_WORKSPACE}/${FIXTURE}" >> "$GITHUB_ENV"
+
+      - name: Read App Configuration from side path
+        id: appconfig
+        uses: ./.github-workflows-src/actions/app-config-read # zizmor: ignore[self-repository]
+        with:
+          login: "false"
+          label: leasemate-marketing
+
+      - name: Assert applied keys
+        env:
+          GOT_COUNT: ${{ steps.appconfig.outputs.count }}
+        run: |
+          set -euo pipefail
+          if [ "$GOT_COUNT" != 4 ]; then
+            echo "::error::count ${GOT_COUNT} != 4"
+            exit 1
+          fi
+          if [ "${PUBLIC_LEAD_INTAKE_ENABLED}" != true ]; then
+            echo "::error::PUBLIC_LEAD_INTAKE_ENABLED=${PUBLIC_LEAD_INTAKE_ENABLED}, expected true (label override)"
+            exit 1
+          fi
+          if [ "${PUBLIC_SITE_NAME}" != LeaseMate ]; then
+            echo "::error::PUBLIC_SITE_NAME=${PUBLIC_SITE_NAME}, expected LeaseMate"
+            exit 1
+          fi
+          if [ "${NEXT_PUBLIC_APP_URL}" != "https://leasemate.example.test" ]; then
+            echo "::error::NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}"
+            exit 1
+          fi
+          expected=$'line one\nline two'
+          if [ "${PUBLIC_FOOTER}" != "$expected" ]; then
+            echo "::error::PUBLIC_FOOTER multiline mismatch"
+            exit 1
+          fi
+          echo "OK caller-context app-config-read applied ${GOT_COUNT} keys"
 
   # Negative cases at step level so the job stays green.
   app-config-read-fail:
@@ -975,6 +1074,7 @@ jobs:
         npm-publish-ok,
         npm-publish-fail,
         app-config-read,
+        app-config-read-caller-context,
         app-config-read-fail,
       ]
     runs-on: ubuntu-latest
@@ -998,11 +1098,12 @@ jobs:
           NPM_OK: ${{ needs.npm-publish-ok.result }}
           NPM_FAIL: ${{ needs.npm-publish-fail.result }}
           APPCONFIG_OK: ${{ needs.app-config-read.result }}
+          APPCONFIG_CALLER: ${{ needs.app-config-read-caller-context.result }}
           APPCONFIG_FAIL: ${{ needs.app-config-read-fail.result }}
         run: |
           set -euo pipefail
           failed=0
-          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-fail:${SCAN_FAIL}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}" "npm-publish-ok:${NPM_OK}" "npm-publish-fail:${NPM_FAIL}" "app-config-read:${APPCONFIG_OK}" "app-config-read-fail:${APPCONFIG_FAIL}"; do
+          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-fail:${SCAN_FAIL}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}" "npm-publish-ok:${NPM_OK}" "npm-publish-fail:${NPM_FAIL}" "app-config-read:${APPCONFIG_OK}" "app-config-read-caller-context:${APPCONFIG_CALLER}" "app-config-read-fail:${APPCONFIG_FAIL}"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             if [ "$result" != success ]; then

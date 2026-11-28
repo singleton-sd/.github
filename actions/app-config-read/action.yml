@@ -54,7 +54,7 @@ runs:
   steps:
     - name: Azure OIDC login
       if: ${{ inputs.login == 'true' }}
-      uses: ./actions/azure-oidc-login # zizmor: ignore[self-repository]
+      uses: singleton-sd/.github/actions/azure-oidc-login@0e40c2d9fb4139c8715aeae28de50a417e7b72df # v1.0.6
       with:
         client-id: ${{ inputs.client_id }}
         tenant-id: ${{ inputs.tenant_id }}

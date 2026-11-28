@@ -510,6 +510,109 @@ test("matching composite pin stays in the lock on write", () => {
   assert.equal(lock.dependencies[AZURE_PIN].ref, "v3.1.0");
 });
 
+function appConfigWorkflow() {
+  return reusableWorkflow({
+    name: "Pages build with App Configuration",
+    filename: "pages-build-app-config.yml",
+  })
+    .replace("name: Pages build", "name: Pages build with App Configuration")
+    .replace(
+      "permissions:\n      contents: read",
+      "permissions:\n      contents: read\n      id-token: write",
+    );
+}
+
+function writePagesBuildAppConfigTree(root) {
+  write(
+    root,
+    ".github/workflows/pages-build.yml",
+    reusableWorkflow({
+      extraSteps: `      - name: App Configuration uses pages-build-app-config.yml
+        run: echo pages-build-app-config.yml
+`,
+    }),
+  );
+  write(root, ".github/workflows/pages-build-app-config.yml", appConfigWorkflow());
+  write(
+    root,
+    ".github/workflows/self-test.yml",
+    selfTestYaml().replace(
+      "    uses: ./.github/workflows/pages-smoke.yml\n",
+      "    uses: ./.github/workflows/pages-smoke.yml\n  pages-build-app-config:\n    permissions:\n      contents: read\n      id-token: write\n    uses: ./.github/workflows/pages-build-app-config.yml\n",
+    ),
+  );
+}
+
+test("pages-build.yml must not request id-token: write", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writePagesBuildAppConfigTree(root);
+  write(
+    root,
+    ".github/workflows/pages-build.yml",
+    reusableWorkflow({
+      extraSteps: `      - name: App Configuration uses pages-build-app-config.yml
+        run: echo pages-build-app-config.yml
+`,
+    }).replace(
+      "permissions:\n      contents: read",
+      "permissions:\n      contents: read\n      id-token: write",
+    ),
+  );
+  lintRepo(root, { writeLock: true });
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) => error.includes("pages-build.yml") && error.includes("id-token: write")),
+    result.errors.join("\n"),
+  );
+});
+
+test("pages-build.yml templates must not grant id-token: write", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writePagesBuildAppConfigTree(root);
+  write(
+    root,
+    "workflow-templates/pages-production.yml",
+    `name: Deploy production GitHub Pages
+on:
+  push:
+jobs:
+  build:
+    uses: singleton-sd/.github/.github/workflows/pages-build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+`,
+  );
+  lintRepo(root, { writeLock: true });
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) => error.includes("workflow-templates/pages-production.yml") && error.includes("id-token: write")),
+    result.errors.join("\n"),
+  );
+});
+
+test("pages-build-app-config.yml must request id-token: write", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writePagesBuildAppConfigTree(root);
+  write(
+    root,
+    ".github/workflows/pages-build-app-config.yml",
+    reusableWorkflow({
+      name: "Pages build with App Configuration",
+      filename: "pages-build-app-config.yml",
+    }).replace("name: Pages build", "name: Pages build with App Configuration"),
+  );
+  lintRepo(root, { writeLock: true });
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) => error.includes("pages-build-app-config.yml") && error.includes("id-token: write")),
+    result.errors.join("\n"),
+  );
+});
+
 test("missing workflow pin still fails after composite-only tolerance", () => {
   const root = tempRoot();
   passingTree(root);

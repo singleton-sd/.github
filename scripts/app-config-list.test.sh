@@ -92,4 +92,30 @@ if ! grep -q 'https data-plane URL' "$WORKDIR/endpoint.err"; then
   fail "missing endpoint error"
 fi
 
+# Newlines in key_prefixes must not drop later prefixes.
+export APP_CONFIG_AZ_LOG="$WORKDIR/az-multiline.log"
+export APP_CONFIG_KEY_PREFIXES=$'PUBLIC_,\nNEXT_PUBLIC_'
+bash "$SCRIPT" >"$WORKDIR/multiline.json"
+python3 - "$WORKDIR/multiline.json" "$APP_CONFIG_AZ_LOG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+items = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+log = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
+if len(log) != 2:
+    raise SystemExit(f"newline prefixes: expected 2 az invocations, got {len(log)}: {log}")
+if not any("key=PUBLIC_*" in line for line in log):
+    raise SystemExit(f"newline prefixes missing PUBLIC_*: {log}")
+if not any("key=NEXT_PUBLIC_*" in line for line in log):
+    raise SystemExit(f"newline prefixes missing NEXT_PUBLIC_*: {log}")
+keys = sorted({item["key"] for item in items})
+want = ["NEXT_PUBLIC_APP_URL", "PUBLIC_FOOTER", "PUBLIC_LEAD_INTAKE_ENABLED", "PUBLIC_SITE_NAME"]
+if keys != want:
+    raise SystemExit(f"newline prefixes merged keys {keys} != {want}")
+print("OK newline prefixes listed both PUBLIC_ and NEXT_PUBLIC_")
+PY
+export APP_CONFIG_KEY_PREFIXES="PUBLIC_,NEXT_PUBLIC_"
+export APP_CONFIG_AZ_LOG="$WORKDIR/az.log"
+
 echo "OK app-config-list tests"

@@ -1,0 +1,205 @@
+# Pages build that reads public prefixes from Azure App Configuration.
+# Callers pin @v1 and grant id-token: write. Do not call this from
+# pages-build.yml: GitHub validates nested-job permissions at parse time.
+# Naming: ADR-011 (Singleton SD reusable workflow naming).
+name: Pages build with App Configuration
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: Node.js version for setup-node
+        type: string
+        default: "24"
+      working_directory:
+        description: Site package directory relative to the repository root
+        type: string
+        default: "."
+      dist_path:
+        description: Build output directory, relative to working_directory
+        type: string
+        default: dist
+      turnstile_policy:
+        description: >-
+          when-lead-intake-enabled requires PUBLIC_TURNSTILE_SITE_KEY only
+          when PUBLIC_LEAD_INTAKE_ENABLED is on. always requires the key.
+        type: string
+        default: when-lead-intake-enabled
+      preview_base_path:
+        description: Optional Astro/base path for PR preview builds (e.g. /pr-preview/pr-12/)
+        type: string
+        default: ""
+      run_a11y:
+        description: Run pnpm test:a11y after the build
+        type: boolean
+        default: true
+      artifact_name:
+        description: Name of the uploaded dist artifact
+        type: string
+        default: pages-dist
+      public_turnstile_site_key:
+        description: >-
+          Optional override for App Configuration PUBLIC_TURNSTILE_SITE_KEY
+          (public site key only). Non-empty values win over the store.
+          Preview callers may pass the Cloudflare dummy key.
+        type: string
+        default: ""
+      public_lead_intake_enabled:
+        description: >-
+          Optional override for App Configuration PUBLIC_LEAD_INTAKE_ENABLED.
+          Non-empty values win over the store.
+        type: string
+        default: ""
+      public_leads_api_url:
+        description: >-
+          Optional override for App Configuration PUBLIC_LEADS_API_URL.
+          Non-empty values win over the store.
+        type: string
+        default: ""
+      app_config_key_prefixes:
+        description: Comma-separated App Configuration key prefixes to export
+        type: string
+        default: "PUBLIC_,NEXT_PUBLIC_"
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: ${{ inputs.working_directory }}/package.json
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+          cache-dependency-path: ${{ inputs.working_directory }}/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Lint and type-check
+        run: pnpm lint
+
+      - name: Run tests
+        run: pnpm test
+
+      # Local ./actions paths resolve against the caller's workspace. Check
+      # out this reusable workflow's own repo and SHA (same as pages-smoke).
+      - name: Check out shared App Configuration action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+          path: .github-workflows-src
+
+      - name: Read App Configuration
+        uses: ./.github-workflows-src/actions/app-config-read # zizmor: ignore[self-repository]
+        with:
+          key_prefixes: ${{ inputs.app_config_key_prefixes }}
+
+      - name: Apply public_* input overrides
+        env:
+          INPUT_PUBLIC_TURNSTILE_SITE_KEY: ${{ inputs.public_turnstile_site_key }}
+          INPUT_PUBLIC_LEAD_INTAKE_ENABLED: ${{ inputs.public_lead_intake_enabled }}
+          INPUT_PUBLIC_LEADS_API_URL: ${{ inputs.public_leads_api_url }}
+        run: bash "${GITHUB_WORKSPACE}/.github-workflows-src/scripts/apply-public-input-overrides.sh"
+
+      - name: Require Turnstile site key from App Configuration
+        env:
+          TURNSTILE_POLICY: ${{ inputs.turnstile_policy }}
+        run: |
+          set -euo pipefail
+          # Keep in sync with scripts/check-turnstile-policy.sh (tested in self-test).
+          case "${PUBLIC_LEAD_INTAKE_ENABLED:-}" in
+            true|TRUE|1|yes|YES) enabled=1 ;;
+            *) enabled=0 ;;
+          esac
+          case "${TURNSTILE_POLICY}" in
+            always)
+              if [ -z "${PUBLIC_TURNSTILE_SITE_KEY:-}" ]; then
+                echo "::error::Set PUBLIC_TURNSTILE_SITE_KEY in Azure App Configuration (public site key only)."
+                exit 1
+              fi
+              ;;
+            when-lead-intake-enabled)
+              if [ "$enabled" = 1 ] && [ -z "${PUBLIC_TURNSTILE_SITE_KEY:-}" ]; then
+                echo "::error::Set PUBLIC_TURNSTILE_SITE_KEY in Azure App Configuration (public site key only) before enabling PUBLIC_LEAD_INTAKE_ENABLED."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Unknown turnstile_policy '${TURNSTILE_POLICY}' (expected always or when-lead-intake-enabled)."
+              exit 1
+              ;;
+          esac
+
+      - name: Build site with App Configuration
+        env:
+          PREVIEW_BASE_PATH: ${{ inputs.preview_base_path }}
+        run: pnpm build
+
+      - name: Install Playwright browsers
+        run: pnpm playwright:install
+
+      - name: SEO metadata checks
+        run: pnpm test:seo
+
+      - name: Accessibility checks
+        if: ${{ inputs.run_a11y }}
+        run: pnpm test:a11y
+
+      - name: Ensure .nojekyll for GitHub Pages
+        env:
+          DIST_PATH: ${{ inputs.dist_path }}
+        run: |
+          set -euo pipefail
+          touch "${DIST_PATH}/.nojekyll"
+          if [ ! -f "${DIST_PATH}/.nojekyll" ]; then
+            echo "::error::${DIST_PATH}/.nojekyll is missing after touch; GitHub Pages would Jekyll-hide /_astro/ assets."
+            exit 1
+          fi
+
+      - name: Upload dist
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.working_directory }}/${{ inputs.dist_path }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Write job summary
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          HEAD_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Pages build with App Configuration"
+            echo "- workflow_ref: \`${WORKFLOW_REF}\`"
+            echo "- sha: \`${HEAD_SHA}\`"
+            echo "- workflow_sha: \`${WORKFLOW_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

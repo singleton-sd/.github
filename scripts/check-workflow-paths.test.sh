@@ -6,6 +6,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/.github/workflows/pages-build.yml"
+BUILD_APP_CONFIG="$ROOT/.github/workflows/pages-build-app-config.yml"
 DEPLOY="$ROOT/.github/workflows/pages-deploy.yml"
 JOINED='${{ inputs.working_directory }}/${{ inputs.dist_path }}'
 PKG='${{ inputs.working_directory }}/package.json'
@@ -43,6 +44,11 @@ count_need "$DEPLOY" "source-dir: ${JOINED}" 2 "pages-deploy preview source-dir 
 
 # Default working_directory remains "." so JOINED is ./dist at the root.
 need "$BUILD" 'default: "."' "pages-build working_directory default"
+need "$BUILD_APP_CONFIG" "$WORKDIR" "pages-build-app-config run working-directory"
+need "$BUILD_APP_CONFIG" "$PKG" "pages-build-app-config pnpm package_json_file"
+need "$BUILD_APP_CONFIG" "$LOCK" "pages-build-app-config pnpm cache-dependency-path"
+need "$BUILD_APP_CONFIG" "$JOINED" "pages-build-app-config artifact path"
+need "$BUILD_APP_CONFIG" 'default: "."' "pages-build-app-config working_directory default"
 need "$DEPLOY" 'default: "."' "pages-deploy working_directory default"
 
 echo "check-workflow-paths: nested and default working_directory joins are present"

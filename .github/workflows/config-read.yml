@@ -60,9 +60,19 @@ jobs:
       count: ${{ steps.appconfig.outputs.count }}
       applied: ${{ steps.appconfig.outputs.applied }}
     steps:
+      # Local ./actions paths resolve against the caller's workspace. Check
+      # out this reusable workflow's own repo and SHA (same as pages-smoke).
+      - name: Check out shared action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+          path: .github-workflows-src
+
       - name: Read App Configuration
         id: appconfig
-        uses: ./actions/app-config-read # zizmor: ignore[self-repository]
+        uses: ./.github-workflows-src/actions/app-config-read # zizmor: ignore[self-repository]
         with:
           endpoint: ${{ inputs.endpoint }}
           label: ${{ inputs.label }}

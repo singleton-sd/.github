@@ -63,10 +63,18 @@ Every selected key is written to the job summary and the job log (key, label
 or `(none)`, value, etag, last-modified). Allowed only because these prefixes
 are public.
 
+Local `uses: ./actions/...` inside a composite still resolves against the
+**caller** workspace. Nested login is therefore SHA-pinned
+`singleton-sd/.github/actions/azure-oidc-login@<sha>`. Reusable workflows that
+call this composite check out this repository at `job.workflow_sha` into
+`.github-workflows-src` and use `./.github-workflows-src/actions/app-config-read`.
+
 ## Same-job Pages builds
 
-`pages-build.yml` can call this composite when `app_config: true`. Callers of
-that workflow grant `id-token: write` on the build job even when the input is
-false (GitHub validates nested-job permissions). The reusable
+[`pages-build-app-config.yml`](../../.github/workflows/pages-build-app-config.yml)
+calls this composite (callers grant `id-token: write`). `pages-build.yml`
+does not: GitHub validates nested-job permissions at parse time, so adding
+`id-token: write` there would break existing `contents: read` callers.
+Non-empty `public_*` workflow inputs win over App Configuration. The reusable
 [`config-read.yml`](../../.github/workflows/config-read.yml) wrapper exposes
 `count` and `applied` as **job** outputs for a separate job.

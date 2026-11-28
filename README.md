@@ -23,7 +23,6 @@ jobs:
     uses: singleton-sd/.github/.github/workflows/pages-build.yml@v1
     permissions:
       contents: read
-      id-token: write
 ```
 
 The double `.github` is required: `{owner}/{repo}/.github/workflows/{file}@{ref}`.
@@ -39,7 +38,8 @@ Releases are cut by [`.github/workflows/self-release.yml`](.github/workflows/sel
 
 | Area | Workflow or action | Purpose | Caller permissions | Secrets | Status | Known callers |
 | --- | --- | --- | --- | --- | --- | --- |
-| pages | [`pages-build.yml`](.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact. Optional `app_config` | `contents: read`, `id-token: write` | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
+| pages | [`pages-build.yml`](.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact | `contents: read` | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
+| pages | [`pages-build-app-config.yml`](.github/workflows/pages-build-app-config.yml) | Same as `pages-build.yml`, then read public prefixes from Azure App Configuration | `contents: read`, `id-token: write` | none | active | none yet |
 | pages | [`pages-deploy.yml`](.github/workflows/pages-deploy.yml) | Download artifact, rewrite `.nojekyll`, mint singleton-release App token, deploy production or preview (`dry_run` skips the push) | `contents: read`, `actions: read` | `RELEASE_APP_PRIVATE_KEY` (not required when `dry_run: true`) | active | org starters `pages-production.yml`, `pages-preview.yml` |
 | pages | [`pages-smoke.yml`](.github/workflows/pages-smoke.yml) | Live Pages smoke: HTTP 200, title/root needle, CSS/JS content-types | `contents: read` | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
 | self | [`self-ci.yml`](.github/workflows/self-ci.yml) | Required check `self-ci`: actionlint, shellcheck, policy tests, contract lint, zizmor | n/a (this repo) | none | active | this repository |
@@ -80,9 +80,10 @@ runner.
 
 No secrets. Reads `vars.PUBLIC_LEAD_INTAKE_ENABLED`,
 `vars.PUBLIC_TURNSTILE_SITE_KEY`, and `vars.PUBLIC_LEADS_API_URL` from the
-caller unless overridden. When `app_config` is true, public prefixes come
-from Azure App Configuration instead. GitHub requires the caller to grant
-`id-token: write` even when `app_config` is false (nested job permissions).
+caller unless overridden. Callers grant `contents: read` only. GitHub
+validates nested-job permissions at parse time, so this workflow never
+requests `id-token: write`. `app_config: true` fails fast and points at
+`pages-build-app-config.yml`.
 
 | Input | Default | Notes |
 | --- | --- | --- |
@@ -96,8 +97,43 @@ from Azure App Configuration instead. GitHub requires the caller to grant
 | `public_turnstile_site_key` | `""` | Public site key only. Preview callers may pass the Cloudflare dummy key |
 | `public_lead_intake_enabled` | `""` | |
 | `public_leads_api_url` | `""` | |
-| `app_config` | `false` | When true, read App Configuration before Turnstile/build |
-| `app_config_key_prefixes` | `PUBLIC_,NEXT_PUBLIC_` | Used only when `app_config` is true |
+| `app_config` | `false` | Must stay false. Use `pages-build-app-config.yml` instead |
+| `app_config_key_prefixes` | `PUBLIC_,NEXT_PUBLIC_` | Unused here; accepted so a mistaken `app_config: true` still fail-fasts |
+
+### `pages-build-app-config.yml`
+
+Same build as `pages-build.yml`, then reads public prefixes from Azure App
+Configuration. Callers pin `@v1` and grant `id-token: write`. Local
+`./actions/...` paths resolve against the **caller** workspace, so this
+workflow checks out `job.workflow_repository` at `job.workflow_sha` into
+`.github-workflows-src` (same pattern as `pages-smoke.yml`). Nested login
+is SHA-pinned `singleton-sd/.github/actions/azure-oidc-login`.
+
+Non-empty `public_*` inputs win over App Configuration (preview dummy
+Turnstile key). Empty inputs leave the store values.
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `node_version` | `24` | |
+| `working_directory` | `.` | Site package directory relative to the repository root |
+| `dist_path` | `dist` | Relative to `working_directory` |
+| `turnstile_policy` | `when-lead-intake-enabled` | `always` requires the public Turnstile site key on every build |
+| `preview_base_path` | `""` | Set on preview builds (for example `/pr-preview/pr-12/`) |
+| `run_a11y` | `true` | |
+| `artifact_name` | `pages-dist` | Use `preview-dist` on preview jobs |
+| `public_turnstile_site_key` | `""` | Non-empty values win over App Configuration |
+| `public_lead_intake_enabled` | `""` | Non-empty values win over App Configuration |
+| `public_leads_api_url` | `""` | Non-empty values win over App Configuration |
+| `app_config_key_prefixes` | `PUBLIC_,NEXT_PUBLIC_` | Comma-separated prefixes to export |
+
+```yaml
+jobs:
+  build:
+    uses: singleton-sd/.github/.github/workflows/pages-build-app-config.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+```
 
 ### `pages-deploy.yml`
 
@@ -180,7 +216,6 @@ jobs:
     uses: singleton-sd/.github/.github/workflows/pages-build.yml@v1
     permissions:
       contents: read
-      id-token: write
     with:
       turnstile_policy: when-lead-intake-enabled
       artifact_name: pages-dist

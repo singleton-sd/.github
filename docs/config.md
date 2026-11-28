@@ -6,7 +6,7 @@ pin `@v1`.
 | Workflow or action | Role |
 | --- | --- |
 | [`actions/app-config-read`](../actions/app-config-read/README.md) | Composite: OIDC login, one `az appconfig kv list` per prefix, export to `GITHUB_ENV` |
-| [`config-read.yml`](../.github/workflows/config-read.yml) | Thin `workflow_call` wrapper. Job outputs: `count`, `applied` (JSON) |
+| [`config-read.yml`](../.github/workflows/config-read.yml) | Thin `workflow_call` wrapper. Job outputs: `count`, `applied` (JSON). Checks out this repo at `job.workflow_sha` into `.github-workflows-src` because `./actions/...` resolves against the caller workspace. |
 
 Store endpoint: `https://ssd-global-appcs-build-prod-ae.azconfig.io` (data
 plane, `--endpoint` + `--auth-mode login`). Do not pass `--name`.
@@ -39,8 +39,9 @@ is named; the value is never printed or resolved.
 
 ## Pages build
 
-[`pages-build.yml`](../.github/workflows/pages-build.yml) `app_config` (default
-`false`) calls the composite before Turnstile and `pnpm build`. Default
-`false` keeps GitHub `vars.*` behaviour. Callers grant `id-token: write` on
-the build job (GitHub checks nested-job permissions even when the input is
-false) and may set `app_config_key_prefixes`.
+[`pages-build.yml`](../.github/workflows/pages-build.yml) stays
+`contents: read` and keeps GitHub `vars.*` behaviour. GitHub validates
+nested-job permissions at parse time, so that workflow cannot request
+`id-token: write` without breaking existing callers. App Configuration
+builds use [`pages-build-app-config.yml`](../.github/workflows/pages-build-app-config.yml)
+(`id-token: write`). Non-empty `public_*` inputs win over store values.

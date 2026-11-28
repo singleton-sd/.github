@@ -133,6 +133,9 @@ jobs:
       - name: Test App Configuration list
         run: bash scripts/app-config-list.test.sh
 
+      - name: Test public_* input overrides
+        run: bash scripts/apply-public-input-overrides.test.sh
+
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@1b4550e929643b8b26a62303c6bd64814271a4f1 # v0.9.2
         with:
@@ -148,5 +151,6 @@ jobs:
             .github/workflows/self-release.yml
             .github/workflows/security-scan.yml
             .github/workflows/config-read.yml
+            .github/workflows/pages-build-app-config.yml
             workflow-templates
             actions

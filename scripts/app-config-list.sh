@@ -34,8 +34,10 @@ fi
 files=()
 i=0
 
-# shellcheck disable=SC2086
-IFS=',' read -r -a prefixes <<< "${APP_CONFIG_KEY_PREFIXES}"
+# Collapse newlines so a YAML folded/literal key_prefixes value still
+# splits on commas. `read` otherwise stops at the first newline.
+normalized="$(printf '%s' "${APP_CONFIG_KEY_PREFIXES}" | tr '\n' ',')"
+IFS=',' read -r -a prefixes <<< "${normalized}"
 for raw in "${prefixes[@]}"; do
   prefix="${raw#"${raw%%[![:space:]]*}"}"
   prefix="${prefix%"${prefix##*[![:space:]]}"}"

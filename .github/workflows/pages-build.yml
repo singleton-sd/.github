@@ -1,8 +1,8 @@
 # Reusable marketing Pages build. No secrets. Callers pin @v1, never @main.
 # PUBLIC_* values come from caller repository variables unless overridden.
-# When app_config is true, public prefixes are read from Azure App
-# Configuration first. Callers always grant id-token: write (GitHub
-# validates nested-job permissions even when the input is false).
+# When app_config is true, this workflow fails fast: GitHub validates
+# nested-job permissions at parse time, so requesting id-token: write here
+# would break every contents:read caller. Use pages-build-app-config.yml.
 # Naming: ADR-011 (Singleton SD reusable workflow naming).
 name: Pages build
 
@@ -42,7 +42,9 @@ on:
       public_turnstile_site_key:
         description: >-
           Optional override for vars.PUBLIC_TURNSTILE_SITE_KEY (public site key
-          only). Preview callers may pass the Cloudflare dummy key.
+          only). Preview callers may pass the Cloudflare dummy key. When
+          App Configuration is enabled (pages-build-app-config.yml), a
+          non-empty value wins over the store.
         type: string
         default: ""
       public_lead_intake_enabled:
@@ -55,10 +57,10 @@ on:
         default: ""
       app_config:
         description: >-
-          When true, read public prefixes from Azure App Configuration
-          before Turnstile and build. Callers grant id-token: write on this
-          job even when false. Default false leaves GitHub vars behaviour
-          unchanged.
+          Must stay false on this workflow. GitHub validates nested-job
+          permissions at parse time, so this job cannot request id-token:
+          write without breaking contents:read callers. Use
+          pages-build-app-config.yml@v1 with id-token: write instead.
         type: boolean
         default: false
       app_config_key_prefixes:
@@ -72,16 +74,19 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # GitHub validates nested-job permissions against the caller even when
-    # app_config is false, so this job always requests id-token: write.
-    # Callers must grant it. The token is unused unless app_config is true.
     permissions:
       contents: read
-      id-token: write
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
     steps:
+      - name: App Configuration uses pages-build-app-config.yml
+        if: ${{ inputs.app_config }}
+        run: |
+          set -euo pipefail
+          echo "::error::Call singleton-sd/.github/.github/workflows/pages-build-app-config.yml@v1 with permissions contents: read and id-token: write. GitHub validates reusable-workflow job permissions at parse time, so pages-build.yml cannot request id-token: write without breaking existing contents:read callers."
+          exit 1
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,14 +117,7 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      - name: Read App Configuration
-        if: ${{ inputs.app_config }}
-        uses: ./actions/app-config-read # zizmor: ignore[self-repository]
-        with:
-          key_prefixes: ${{ inputs.app_config_key_prefixes }}
-
       - name: Require Turnstile site key
-        if: ${{ !inputs.app_config }}
         env:
           TURNSTILE_POLICY: ${{ inputs.turnstile_policy }}
           PUBLIC_LEAD_INTAKE_ENABLED: ${{ inputs.public_lead_intake_enabled || vars.PUBLIC_LEAD_INTAKE_ENABLED }}
@@ -150,48 +148,11 @@ jobs:
               ;;
           esac
 
-      - name: Require Turnstile site key from App Configuration
-        if: ${{ inputs.app_config }}
-        env:
-          TURNSTILE_POLICY: ${{ inputs.turnstile_policy }}
-        run: |
-          set -euo pipefail
-          # Keep in sync with scripts/check-turnstile-policy.sh (tested in self-test).
-          case "${PUBLIC_LEAD_INTAKE_ENABLED:-}" in
-            true|TRUE|1|yes|YES) enabled=1 ;;
-            *) enabled=0 ;;
-          esac
-          case "${TURNSTILE_POLICY}" in
-            always)
-              if [ -z "${PUBLIC_TURNSTILE_SITE_KEY:-}" ]; then
-                echo "::error::Set PUBLIC_TURNSTILE_SITE_KEY in Azure App Configuration (public site key only)."
-                exit 1
-              fi
-              ;;
-            when-lead-intake-enabled)
-              if [ "$enabled" = 1 ] && [ -z "${PUBLIC_TURNSTILE_SITE_KEY:-}" ]; then
-                echo "::error::Set PUBLIC_TURNSTILE_SITE_KEY in Azure App Configuration (public site key only) before enabling PUBLIC_LEAD_INTAKE_ENABLED."
-                exit 1
-              fi
-              ;;
-            *)
-              echo "::error::Unknown turnstile_policy '${TURNSTILE_POLICY}' (expected always or when-lead-intake-enabled)."
-              exit 1
-              ;;
-          esac
-
       - name: Build site
-        if: ${{ !inputs.app_config }}
         env:
           PUBLIC_LEAD_INTAKE_ENABLED: ${{ inputs.public_lead_intake_enabled || vars.PUBLIC_LEAD_INTAKE_ENABLED }}
           PUBLIC_TURNSTILE_SITE_KEY: ${{ inputs.public_turnstile_site_key || vars.PUBLIC_TURNSTILE_SITE_KEY }}
           PUBLIC_LEADS_API_URL: ${{ inputs.public_leads_api_url || vars.PUBLIC_LEADS_API_URL }}
-          PREVIEW_BASE_PATH: ${{ inputs.preview_base_path }}
-        run: pnpm build
-
-      - name: Build site with App Configuration
-        if: ${{ inputs.app_config }}
-        env:
           PREVIEW_BASE_PATH: ${{ inputs.preview_base_path }}
         run: pnpm build
 
