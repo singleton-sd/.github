@@ -114,6 +114,16 @@ jobs:
           persist-credentials: false
           path: .github-workflows-src
 
+      # Never runs. Records the nested azure-oidc-login SHA so this
+      # workflow's actions.lock list includes singleton-sd/.github@sha.
+      - name: Lock nested azure-oidc-login pin
+        if: ${{ github.run_attempt == 0 }}
+        uses: singleton-sd/.github/actions/azure-oidc-login@0e40c2d9fb4139c8715aeae28de50a417e7b72df # v1.0.6
+        with:
+          client-id: 00000000-0000-0000-0000-000000000000
+          tenant-id: 00000000-0000-0000-0000-000000000000
+          subscription-id: 00000000-0000-0000-0000-000000000000
+
       - name: Read App Configuration
         uses: ./.github-workflows-src/actions/app-config-read # zizmor: ignore[self-repository]
         with:

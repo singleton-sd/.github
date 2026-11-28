@@ -815,11 +815,20 @@ jobs:
         with:
           persist-credentials: false
 
-      # Never runs. Records the nested azure/login pin from
-      # ./actions/azure-oidc-login so actions.lock can cover this workflow.
+      # Never runs. Records nested pins from ./actions/app-config-read and
+      # ./actions/azure-oidc-login so this workflow's actions.lock list
+      # includes them (GitHub looks up SHA pins per calling workflow).
       - name: Lock nested Azure OIDC login pin
         if: ${{ github.run_attempt == 0 }}
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: 00000000-0000-0000-0000-000000000000
+          tenant-id: 00000000-0000-0000-0000-000000000000
+          subscription-id: 00000000-0000-0000-0000-000000000000
+
+      - name: Lock nested azure-oidc-login pin
+        if: ${{ github.run_attempt == 0 }}
+        uses: singleton-sd/.github/actions/azure-oidc-login@0e40c2d9fb4139c8715aeae28de50a417e7b72df # v1.0.6
         with:
           client-id: 00000000-0000-0000-0000-000000000000
           tenant-id: 00000000-0000-0000-0000-000000000000

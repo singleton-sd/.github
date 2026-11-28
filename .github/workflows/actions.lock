@@ -5,11 +5,13 @@ version: 'v0.0.3'
 workflows:
     '.github/workflows/config-read.yml':
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+        - 'singleton-sd/.github@0e40c2d9fb4139c8715aeae28de50a417e7b72df'
     '.github/workflows/pages-build-app-config.yml':
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
         - 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1'
         - 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9'
         - 'pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115'
+        - 'singleton-sd/.github@0e40c2d9fb4139c8715aeae28de50a417e7b72df'
     '.github/workflows/pages-build.yml':
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
         - 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1'
@@ -39,6 +41,7 @@ workflows:
         - 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1'
         - 'azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906'
         - 'pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115'
+        - 'singleton-sd/.github@0e40c2d9fb4139c8715aeae28de50a417e7b72df'
 dependencies:
     'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1':
         ref: 'v7.0.1'

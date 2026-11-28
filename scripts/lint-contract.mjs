@@ -662,6 +662,32 @@ function usesPagesBuildReusable(uses) {
   return uses.includes(".github/workflows/pages-build.yml@");
 }
 
+const NESTED_AZURE_OIDC_PIN =
+  /singleton-sd\/\.github\/actions\/azure-oidc-login@[0-9a-fA-F]{40}/;
+
+export function lintAppConfigNestedLoginLock(root, errors) {
+  const files = [
+    ".github/workflows/self-test.yml",
+    ".github/workflows/config-read.yml",
+    ".github/workflows/pages-build-app-config.yml",
+  ];
+  for (const rel of files) {
+    const path = join(root, rel);
+    if (!existsSync(path)) {
+      continue;
+    }
+    const raw = readFileSync(path, "utf8");
+    if (!raw.includes("actions/app-config-read")) {
+      continue;
+    }
+    if (!NESTED_AZURE_OIDC_PIN.test(raw)) {
+      errors.push(
+        `${rel}: must SHA-pin nested azure-oidc-login so actions.lock lists singleton-sd/.github@sha for this workflow`,
+      );
+    }
+  }
+}
+
 export function lintPagesBuildIdTokenContract(root, errors) {
   const pagesBuildPath = join(root, ".github", "workflows", "pages-build.yml");
   const appConfigPath = join(root, ".github", "workflows", "pages-build-app-config.yml");
@@ -805,6 +831,7 @@ export function lintRepo(root, options = {}) {
   }
 
   lintPagesBuildIdTokenContract(root, errors);
+  lintAppConfigNestedLoginLock(root, errors);
 
   const collected = collectThirdPartyPins(root);
   errors.push(...collected.errors);

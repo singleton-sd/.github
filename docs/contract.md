@@ -43,7 +43,10 @@ uses the local `./.github/workflows/<file>.yml` path.
   `${{ job.workflow_sha }}` into `.github-workflows-src` (see `pages-smoke.yml`).
   Nested login from `actions/app-config-read` is SHA-pinned
   `singleton-sd/.github/actions/azure-oidc-login@<sha>`. GitHub's native
-  lockfile keys that as `singleton-sd/.github@<sha>` (not the action path).
+  lockfile keys that as `singleton-sd/.github@<sha>` (not the action path)
+  and looks that pin up on the **calling workflow** list, so
+  `self-test.yml`, `config-read.yml`, and `pages-build-app-config.yml`
+  record it with a never-run (`github.run_attempt == 0`) step.
 
   Pins used only inside `actions/*/action.yml` (today `azure/login` in
   `actions/azure-oidc-login`) are recorded in `actions.lock` by

@@ -641,6 +641,28 @@ jobs:
   );
 });
 
+test("workflows that call app-config-read must SHA-pin nested azure-oidc-login", () => {
+  const root = tempRoot();
+  passingTree(root);
+  writePagesBuildAppConfigTree(root);
+  write(
+    root,
+    ".github/workflows/self-test.yml",
+    selfTestYaml().replace(
+      "    uses: ./.github/workflows/pages-smoke.yml\n",
+      "    uses: ./.github/workflows/pages-smoke.yml\n  app-config-read:\n    permissions:\n      contents: read\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./actions/app-config-read\n",
+    ),
+  );
+  lintRepo(root, { writeLock: true });
+  const result = lintRepo(root);
+  assert.ok(
+    result.errors.some((error) =>
+      error.includes("self-test.yml") && error.includes("azure-oidc-login"),
+    ),
+    result.errors.join("\n"),
+  );
+});
+
 test("pages-build-app-config.yml must request id-token: write", () => {
   const root = tempRoot();
   passingTree(root);
