@@ -41,5 +41,6 @@ is named; the value is never printed or resolved.
 
 [`pages-build.yml`](../.github/workflows/pages-build.yml) `app_config` (default
 `false`) calls the composite before Turnstile and `pnpm build`. Default
-`false` keeps GitHub `vars.*` behaviour. When `true`, the caller grants
-`id-token: write` on the build job and may set `app_config_key_prefixes`.
+`false` keeps GitHub `vars.*` behaviour. Callers grant `id-token: write` on
+the build job (GitHub checks nested-job permissions even when the input is
+false) and may set `app_config_key_prefixes`.

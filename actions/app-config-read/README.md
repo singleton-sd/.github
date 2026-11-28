@@ -66,6 +66,7 @@ are public.
 ## Same-job Pages builds
 
 `pages-build.yml` can call this composite when `app_config: true`. Callers of
-that workflow grant `id-token: write` on the build job. The reusable
+that workflow grant `id-token: write` on the build job even when the input is
+false (GitHub validates nested-job permissions). The reusable
 [`config-read.yml`](../../.github/workflows/config-read.yml) wrapper exposes
 `count` and `applied` as **job** outputs for a separate job.

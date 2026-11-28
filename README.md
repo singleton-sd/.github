@@ -23,6 +23,7 @@ jobs:
     uses: singleton-sd/.github/.github/workflows/pages-build.yml@v1
     permissions:
       contents: read
+      id-token: write
 ```
 
 The double `.github` is required: `{owner}/{repo}/.github/workflows/{file}@{ref}`.
@@ -38,7 +39,7 @@ Releases are cut by [`.github/workflows/self-release.yml`](.github/workflows/sel
 
 | Area | Workflow or action | Purpose | Caller permissions | Secrets | Status | Known callers |
 | --- | --- | --- | --- | --- | --- | --- |
-| pages | [`pages-build.yml`](.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact. Optional `app_config` | `contents: read` (`id-token: write` when `app_config: true`) | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
+| pages | [`pages-build.yml`](.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact. Optional `app_config` | `contents: read`, `id-token: write` | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
 | pages | [`pages-deploy.yml`](.github/workflows/pages-deploy.yml) | Download artifact, rewrite `.nojekyll`, mint singleton-release App token, deploy production or preview (`dry_run` skips the push) | `contents: read`, `actions: read` | `RELEASE_APP_PRIVATE_KEY` (not required when `dry_run: true`) | active | org starters `pages-production.yml`, `pages-preview.yml` |
 | pages | [`pages-smoke.yml`](.github/workflows/pages-smoke.yml) | Live Pages smoke: HTTP 200, title/root needle, CSS/JS content-types | `contents: read` | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
 | self | [`self-ci.yml`](.github/workflows/self-ci.yml) | Required check `self-ci`: actionlint, shellcheck, policy tests, contract lint, zizmor | n/a (this repo) | none | active | this repository |
@@ -80,7 +81,8 @@ runner.
 No secrets. Reads `vars.PUBLIC_LEAD_INTAKE_ENABLED`,
 `vars.PUBLIC_TURNSTILE_SITE_KEY`, and `vars.PUBLIC_LEADS_API_URL` from the
 caller unless overridden. When `app_config` is true, public prefixes come
-from Azure App Configuration instead; the caller grants `id-token: write`.
+from Azure App Configuration instead. GitHub requires the caller to grant
+`id-token: write` even when `app_config` is false (nested job permissions).
 
 | Input | Default | Notes |
 | --- | --- | --- |
@@ -178,6 +180,7 @@ jobs:
     uses: singleton-sd/.github/.github/workflows/pages-build.yml@v1
     permissions:
       contents: read
+      id-token: write
     with:
       turnstile_policy: when-lead-intake-enabled
       artifact_name: pages-dist
