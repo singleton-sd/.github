@@ -319,45 +319,98 @@ jobs:
     uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
     with:
       working_directory: tests/fixtures/security-scan-clean
-      # Fixture jobs skip dependency review; YAML false is a bool and cannot
+      # Fixture job skips dependency review; YAML false is a bool and cannot
       # be assigned to this string input, so the value is a string literal.
       dependency_review: ${{ 'false' }} # zizmor: ignore[obfuscation]
 
-  security-scan-tag-pinned:
-    name: security-scan-tag-pinned
+  # Negative fixtures must not call security-scan.yml as jobs: a failed
+  # reusable-workflow job is a red check on the PR. Same pattern as
+  # setup-pnpm-node-fail: run the contract check at step level and assert.
+  security-scan-fail:
+    name: security-scan-fail
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: read
-    uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
-    with:
-      working_directory: tests/fixtures/security-scan-tag-pinned
-      # Fixture jobs skip dependency review; YAML false is a bool and cannot
-      # be assigned to this string input, so the value is a string literal.
-      dependency_review: ${{ 'false' }} # zizmor: ignore[obfuscation]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-  security-scan-secrets-inherit:
-    name: security-scan-secrets-inherit
-    permissions:
-      contents: read
-      pull-requests: read
-    uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
-    with:
-      working_directory: tests/fixtures/security-scan-secrets-inherit
-      # Fixture jobs skip dependency review; YAML false is a bool and cannot
-      # be assigned to this string input, so the value is a string literal.
-      dependency_review: ${{ 'false' }} # zizmor: ignore[obfuscation]
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
 
-  security-scan-azure-login:
-    name: security-scan-azure-login
-    permissions:
-      contents: read
-      pull-requests: read
-    uses: ./.github/workflows/security-scan.yml # zizmor: ignore[self-repository]
-    with:
-      working_directory: tests/fixtures/security-scan-azure-login
-      # Fixture jobs skip dependency review; YAML false is a bool and cannot
-      # be assigned to this string input, so the value is a string literal.
-      dependency_review: ${{ 'false' }} # zizmor: ignore[obfuscation]
+      - name: Tag-pinned checkout must fail
+        env:
+          ROOT: tests/fixtures/security-scan-tag-pinned
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(node scripts/check-caller-contract.mjs --root "${ROOT}" 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::tag-pinned fixture unexpectedly passed"
+            exit 1
+          fi
+          case "${out}" in
+            *unpinned-uses*) ;;
+            *)
+              echo "::error::tag-pinned fixture did not report unpinned-uses"
+              exit 1
+              ;;
+          esac
+          echo "OK tag-pinned failed with unpinned-uses"
+
+      - name: secrets inherit must fail
+        env:
+          ROOT: tests/fixtures/security-scan-secrets-inherit
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(node scripts/check-caller-contract.mjs --root "${ROOT}" 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::secrets-inherit fixture unexpectedly passed"
+            exit 1
+          fi
+          case "${out}" in
+            *secrets-inherit*) ;;
+            *)
+              echo "::error::secrets-inherit fixture did not report secrets-inherit"
+              exit 1
+              ;;
+          esac
+          echo "OK secrets-inherit failed with secrets-inherit"
+
+      - name: inline azure/login must fail
+        env:
+          ROOT: tests/fixtures/security-scan-azure-login
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(node scripts/check-caller-contract.mjs --root "${ROOT}" 2>&1)"
+          code=$?
+          set -e
+          printf '%s\n' "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::azure-login fixture unexpectedly passed"
+            exit 1
+          fi
+          case "${out}" in
+            *inline-azure-login*) ;;
+            *)
+              echo "::error::azure-login fixture did not report inline-azure-login"
+              exit 1
+              ;;
+          esac
+          echo "OK azure-login failed with inline-azure-login"
 
   security-scan-gitleaks-runtime:
     name: security-scan-gitleaks-runtime
@@ -447,9 +500,7 @@ jobs:
         setup-pnpm-node-workspace,
         setup-pnpm-node-fail,
         security-scan-clean,
-        security-scan-tag-pinned,
-        security-scan-secrets-inherit,
-        security-scan-azure-login,
+        security-scan-fail,
         security-scan-gitleaks-runtime,
       ]
     runs-on: ubuntu-latest
@@ -468,14 +519,12 @@ jobs:
           SETUP_WORKSPACE: ${{ needs.setup-pnpm-node-workspace.result }}
           SETUP_FAIL: ${{ needs.setup-pnpm-node-fail.result }}
           SCAN_CLEAN: ${{ needs.security-scan-clean.result }}
-          SCAN_TAG: ${{ needs.security-scan-tag-pinned.result }}
-          SCAN_SECRETS: ${{ needs.security-scan-secrets-inherit.result }}
-          SCAN_AZURE: ${{ needs.security-scan-azure-login.result }}
+          SCAN_FAIL: ${{ needs.security-scan-fail.result }}
           SCAN_GITLEAKS: ${{ needs.security-scan-gitleaks-runtime.result }}
         run: |
           set -euo pipefail
           failed=0
-          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}"; do
+          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-fail:${SCAN_FAIL}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             if [ "$result" != success ]; then
@@ -483,16 +532,6 @@ jobs:
               failed=1
             else
               echo "OK ${name} success"
-            fi
-          done
-          for pair in "security-scan-tag-pinned:${SCAN_TAG}" "security-scan-secrets-inherit:${SCAN_SECRETS}" "security-scan-azure-login:${SCAN_AZURE}"; do
-            name="${pair%%:*}"
-            result="${pair#*:}"
-            if [ "$result" != failure ]; then
-              echo "::error::${name} result is ${result}, expected failure"
-              failed=1
-            else
-              echo "OK ${name} failed as asserted"
             fi
           done
           if [ "$failed" -ne 0 ]; then
