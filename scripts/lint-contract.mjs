@@ -335,6 +335,7 @@ export function formatLock(pins, existingText = "") {
       if (!workflowSets[rel]) {
         workflowSets[rel] = new Set();
       }
+      // GitHub rejects duplicate keys in a workflow's pin list.
       workflowSets[rel].add(key);
     }
   }
@@ -395,6 +396,28 @@ export function parseLock(text) {
     workflows: loaded.workflows && typeof loaded.workflows === "object" ? loaded.workflows : {},
     dependencies,
   };
+}
+
+export function duplicateLockKeys(workflows) {
+  const errors = [];
+  if (!workflows || typeof workflows !== "object") {
+    return errors;
+  }
+  for (const [rel, list] of Object.entries(workflows)) {
+    if (!Array.isArray(list)) {
+      continue;
+    }
+    const seen = new Set();
+    for (const key of list) {
+      if (seen.has(key)) {
+        errors.push(
+          `${LOCK_REL}: duplicate dependency key for workflow ${JSON.stringify(rel)}: ${JSON.stringify(key)}`,
+        );
+      }
+      seen.add(key);
+    }
+  }
+  return errors;
 }
 
 function selfTestCallers(root) {
@@ -601,6 +624,7 @@ export function lintRepo(root, options = {}) {
   } else {
     try {
       const lock = parseLock(readFileSync(lockPath, "utf8"));
+      errors.push(...duplicateLockKeys(lock.workflows));
       for (const pin of collected.pins) {
         const key = lockKeyForPin(pin);
         const dep = lock.dependencies[key];

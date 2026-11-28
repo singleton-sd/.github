@@ -24,7 +24,8 @@ uses the local `./.github/workflows/<file>.yml` path.
   [`.github/workflows/actions.lock`](../.github/workflows/actions.lock).
   `.github/workflows/actions.lock` uses GitHub's v0.0.3 lockfile schema, keyed
   by the SHA pins already in the workflows (callers and this repo keep
-  `uses: owner/repo@<sha> # vX.Y.Z`). Generate and verify with:
+  `uses: owner/repo@<sha> # vX.Y.Z`). Each workflow's pin list is unique: the
+  same SHA used twice in one file appears once. Generate and verify with:
 
   ```bash
   node scripts/lint-contract.mjs --write-lock

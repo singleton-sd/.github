@@ -361,6 +361,39 @@ test("lock mismatch fails", () => {
   assert.ok(result.errors.some((error) => error.includes("actions.lock")));
 });
 
+test("duplicate uses of the same pin in one workflow write one lock key", () => {
+  const root = tempRoot();
+  passingTree(root);
+  write(
+    root,
+    ".github/workflows/pages-deploy.yml",
+    deployWorkflow().replace(
+      `        uses: ${PIN_LINE}\n`,
+      `        uses: ${PIN_LINE}\n      - name: Again\n        uses: ${PIN_LINE}\n`,
+    ),
+  );
+  const result = lintRepo(root, { writeLock: true });
+  assert.equal(result.errors.length, 0, result.errors.join("\n"));
+  const lock = parseLock(result.lock);
+  const list = lock.workflows[".github/workflows/pages-deploy.yml"] || [];
+  assert.equal(list.filter((key) => key === PIN).length, 1);
+});
+
+test("lockfile duplicate workflow pin fails", () => {
+  const root = tempRoot();
+  const generated = passingTree(root);
+  write(
+    root,
+    ".github/workflows/actions.lock",
+    generated.lock.replace(
+      `- '${PIN}'\n`,
+      `- '${PIN}'\n        - '${PIN}'\n`,
+    ),
+  );
+  const result = lintRepo(root);
+  assert.ok(result.errors.some((error) => error.includes("duplicate dependency key")));
+});
+
 test("self-release is not required to have working_directory or dry_run", () => {
   const root = tempRoot();
   passingTree(root);
