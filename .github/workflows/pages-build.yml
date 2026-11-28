@@ -51,8 +51,7 @@ on:
         type: string
         default: ""
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   build:
@@ -162,3 +161,15 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
+
+      - name: Write job summary
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Pages build"
+            echo "- workflow_ref: \`${WORKFLOW_REF}\`"
+            echo "- sha: \`${HEAD_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

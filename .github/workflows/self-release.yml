@@ -3,11 +3,11 @@
 # (immutable). Never runs on pull_request. Tags are pushed with the
 # singleton-release App token, never GITHUB_TOKEN.
 # Naming: ADR-011 (Singleton SD reusable workflow naming).
-name: release
+name: self-release
 
 on:
-  workflow_run:
-    workflows: [self-ci]
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [self-ci, self-test]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -27,11 +27,10 @@ permissions: {}
 
 jobs:
   release:
-    name: release
+    name: self-release
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (
-        github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.head_branch == 'main' &&
         github.event.workflow_run.event == 'push'
       )
@@ -100,14 +99,18 @@ jobs:
           echo "Target SHA ${sha}"
 
       - name: Verify self-ci and self-test
+        id: verify
         env:
+          EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           SHA: ${{ steps.target.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           runs="$(gh api "repos/${REPO}/commits/${SHA}/check-runs?filter=latest&per_page=100")"
-          missing=0
+          failed=0
+          pending=0
+          pending_names=""
           for name in self-ci self-test; do
             row="$(printf '%s' "$runs" | jq -r --arg n "$name" '
               [.check_runs[] | select(.name == $n and .app.slug == "github-actions")] | first
@@ -115,23 +118,46 @@ jobs:
             ')"
             IFS=$'\t' read -r status conclusion <<<"$row"
             if [ "$status" = missing ] || [ -z "$status" ]; then
-              echo "::error::Refusing to tag ${SHA}: required check '${name}' was not found."
-              missing=1
+              echo "Required check '${name}' has not started yet."
+              pending=1
+              pending_names="${pending_names} ${name}"
               continue
             fi
-            if [ "$status" != completed ] || [ "$conclusion" != success ]; then
+            if [ "$status" != completed ]; then
+              echo "Required check '${name}' is ${status}/${conclusion}."
+              pending=1
+              pending_names="${pending_names} ${name}"
+              continue
+            fi
+            if [ "$conclusion" != success ]; then
               echo "::error::Refusing to tag ${SHA}: required check '${name}' is ${status}/${conclusion}."
-              missing=1
+              failed=1
             else
               echo "OK ${name} completed/success"
             fi
           done
-          if [ "$missing" -ne 0 ]; then
+          if [ "$failed" -ne 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=required check failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          if [ "$pending" -ne 0 ]; then
+            reason="waiting for${pending_names} to finish; not tagging"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=${reason}" >> "$GITHUB_OUTPUT"
+            if [ "$EVENT_NAME" = workflow_dispatch ]; then
+              echo "::error::Refusing to tag ${SHA}: required checks are not both green (${reason})."
+              exit 1
+            fi
+            echo "${reason}"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=" >> "$GITHUB_OUTPUT"
 
       - name: Plan version
         id: plan
+        if: steps.verify.outputs.ready == 'true'
         env:
           REPO: ${{ github.repository }}
           SHA: ${{ steps.target.outputs.sha }}
@@ -198,7 +224,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Require singleton-release App credentials
-        if: steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true'
+        if: >-
+          steps.verify.outputs.ready == 'true' &&
+          (steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true')
         env:
           APP_ID: ${{ vars.RELEASE_APP_ID || secrets.RELEASE_APP_ID }}
           HAS_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
@@ -215,7 +243,9 @@ jobs:
 
       - name: Mint GitHub App token
         id: app-token
-        if: steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true'
+        if: >-
+          steps.verify.outputs.ready == 'true' &&
+          (steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true')
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID || secrets.RELEASE_APP_ID }}
@@ -226,7 +256,9 @@ jobs:
 
       - name: Cut version tag and move v1
         id: cut
-        if: steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true'
+        if: >-
+          steps.verify.outputs.ready == 'true' &&
+          (steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true')
         env:
           REPO: ${{ github.repository }}
           SHA: ${{ steps.target.outputs.sha }}
@@ -299,6 +331,8 @@ jobs:
 
       - name: Write job summary
         env:
+          READY: ${{ steps.verify.outputs.ready }}
+          SKIP_REASON: ${{ steps.verify.outputs.skip_reason }}
           SHA: ${{ steps.target.outputs.sha }}
           TAG: ${{ steps.plan.outputs.tag }}
           CREATED: ${{ steps.cut.outputs.created }}
@@ -308,6 +342,14 @@ jobs:
           NEED_V1: ${{ steps.plan.outputs.need_v1 }}
         run: |
           set -euo pipefail
+          if [ "${READY}" != true ]; then
+            {
+              echo "## Release"
+              echo "- sha: \`${SHA}\`"
+              echo "- skipped: ${SKIP_REASON}"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           created="${CREATED:-already on this commit}"
           v1_moved="${V1_MOVED:-${V1_NOTE:-no (already at this commit)}}"
           if [ "${NEED_VERSION}" != true ]; then

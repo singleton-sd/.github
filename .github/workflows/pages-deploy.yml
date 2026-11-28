@@ -41,14 +41,18 @@ on:
         description: rossjrw/pr-preview-action action (deploy or remove)
         type: string
         default: deploy
+      dry_run:
+        description: >-
+          Skip minting a token and pushing gh-pages. Validates inputs and
+          downloads the dist artifact only.
+        type: boolean
+        default: false
     secrets:
       RELEASE_APP_PRIVATE_KEY:
         description: GitHub App private key for singleton-release (contents:write on gh-pages)
-        required: true
+        required: false
 
-permissions:
-  contents: read
-  actions: read
+permissions: {}
 
 jobs:
   deploy:
@@ -111,8 +115,20 @@ jobs:
             exit 1
           fi
 
+      - name: Require deploy secret
+        if: ${{ !inputs.dry_run }}
+        env:
+          HAS_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_KEY}" != true ]; then
+            echo "::error::Pass secrets.RELEASE_APP_PRIVATE_KEY unless dry_run is true."
+            exit 1
+          fi
+
       - name: Mint GitHub App token
         id: app-token
+        if: ${{ !inputs.dry_run }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
@@ -122,7 +138,7 @@ jobs:
           permission-contents: write
 
       - name: Deploy production site
-        if: inputs.mode == 'production'
+        if: ${{ !inputs.dry_run && inputs.mode == 'production' }}
         uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f # v4.8.0
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -136,7 +152,7 @@ jobs:
       # against production / other previews with a second attempt.
       - name: Deploy preview
         id: preview
-        if: inputs.mode == 'preview'
+        if: ${{ !inputs.dry_run && inputs.mode == 'preview' }}
         continue-on-error: true
         uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
         with:
@@ -149,7 +165,7 @@ jobs:
           action: ${{ inputs.preview_action }}
 
       - name: Retry deploy preview
-        if: inputs.mode == 'preview' && steps.preview.outcome == 'failure'
+        if: ${{ !inputs.dry_run && inputs.mode == 'preview' && steps.preview.outcome == 'failure' }}
         uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -159,3 +175,19 @@ jobs:
           umbrella-dir: ${{ inputs.preview_umbrella }}
           comment: false
           action: ${{ inputs.preview_action }}
+
+      - name: Write job summary
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          HEAD_SHA: ${{ github.sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Pages deploy"
+            echo "- workflow_ref: \`${WORKFLOW_REF}\`"
+            echo "- sha: \`${HEAD_SHA}\`"
+            echo "- mode: \`${MODE}\`"
+            echo "- dry_run: \`${DRY_RUN}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

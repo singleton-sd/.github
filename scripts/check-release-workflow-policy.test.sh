@@ -117,12 +117,24 @@ jobs:
 EOF
 expect_fail "$BAD" "$BAD/.github/workflows/release.yml" "unpinned uses" "unpinned uses: @v3.3.0"
 
-got="$(run_policy "$ROOT" "$ROOT/.github/workflows/release.yml" "$OUT")"
+got="$(run_policy "$ROOT" "$ROOT/.github/workflows/self-release.yml" "$OUT")"
 if [ "$got" -ne 0 ]; then
-  echo "FAIL this repository's release.yml should pass"
+  echo "FAIL this repository's self-release.yml should pass"
   cat "$OUT"
   exit 1
 fi
 echo "OK this repository passes"
+
+default_out="$WORKDIR/default.txt"
+set +e
+bash "$SCRIPT" "$ROOT" >"$default_out" 2>&1
+default_got=$?
+set -e
+if [ "$default_got" -ne 0 ]; then
+  echo "FAIL default path should lint self-release.yml"
+  cat "$default_out"
+  exit 1
+fi
+echo "OK default path is self-release.yml"
 
 echo "check-release-workflow-policy: all cases passed"

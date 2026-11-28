@@ -1,0 +1,15 @@
+{
+  "name": "pages-astro-fixture",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.4",
+  "scripts": {
+    "format:check": "node -e \"process.exit(0)\"",
+    "lint": "node -e \"process.exit(0)\"",
+    "test": "node -e \"process.exit(0)\"",
+    "build": "node ./build.mjs",
+    "playwright:install": "node -e \"process.exit(0)\"",
+    "test:seo": "node -e \"process.exit(0)\"",
+    "test:a11y": "node -e \"process.exit(0)\""
+  }
+}

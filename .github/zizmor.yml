@@ -1,0 +1,13 @@
+# Accepted findings: do not weaken the release mechanism or the local
+# self-test callers required by this repository's contract.
+rules:
+  dangerous-triggers:
+    ignore:
+      # workflow_run is how self-release waits for self-ci and self-test on
+      # main. The job still confirms both checks via the API before tagging,
+      # never runs on pull_request, and never uses GITHUB_TOKEN to push tags.
+      - self-release.yml
+  self-repository:
+    ignore:
+      # Contract: only self-test.yml uses the local ./ path; callers pin @v1.
+      - self-test.yml

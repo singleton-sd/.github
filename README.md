@@ -6,10 +6,14 @@ marketing sites (Pages build, deploy, and live smoke checks).
 Naming follows ADR-011 (Singleton SD reusable workflow naming).
 
 Callers **must pin `@v1` or an immutable `@v1.x.y`**, never `@main`. Do not follow a branch.
+`v1` is the current major.
 
 This repository stores **no secrets**. Callers pass secrets through the
 `secrets:` map on `workflow_call`. Public build settings are read from the
 **caller's** GitHub repository variables (`vars.*`).
+
+Contract: [`docs/contract.md`](docs/contract.md). Versioning:
+[`docs/versioning.md`](docs/versioning.md).
 
 ## Pinning
 
@@ -28,17 +32,26 @@ The double `.github` is required: `{owner}/{repo}/.github/workflows/{file}@{ref}
 | `@v1` | Floating annotated tag. A successful release moves it, so callers get fixes without changing the pin. |
 | `@v1.x.y` | Immutable annotated tag. Pin this to freeze a known workflow revision. |
 
-Releases are cut by [`.github/workflows/release.yml`](.github/workflows/release.yml) after `self-ci` and `self-test` pass on that `main` commit. The job writes an annotated `v1.x.y` tag first, then force-updates only `refs/tags/v1` with the singleton-release App token (`vars.RELEASE_APP_ID` or `secrets.RELEASE_APP_ID`, plus `secrets.RELEASE_APP_PRIVATE_KEY`). Patch bumps by default; add a `release:minor` label on the merged PR for a minor bump. A `release:major` label fails the job (a v2 line is out of scope). If the commit already has a `v1.x.y` tag, the version tag is left alone and `v1` is pointed at it when checks passed. The first release on a repo with no `v1.x.y` tags is `v1.0.0`. Manual fallback: dispatch **release** on `main` (optional SHA; still requires green checks).
+Releases are cut by [`.github/workflows/self-release.yml`](.github/workflows/self-release.yml) after `self-ci` and `self-test` pass on that `main` commit. The job writes an annotated `v1.x.y` tag first, then force-updates only `refs/tags/v1` with the singleton-release App token (`vars.RELEASE_APP_ID` or `secrets.RELEASE_APP_ID`, plus `secrets.RELEASE_APP_PRIVATE_KEY`). Patch bumps by default; add a `release:minor` label on the merged PR for a minor bump. A `release:major` label fails the job (a v2 line is out of scope). If the commit already has a `v1.x.y` tag, the version tag is left alone and `v1` is pointed at it when checks passed. The first release on a repo with no `v1.x.y` tags is `v1.0.0`. Manual fallback: dispatch **self-release** on `main` (optional SHA; still requires green checks).
 
-## Workflows
+## Index
 
-| Workflow | Role |
-| --- | --- |
-| [`pages-build.yml`](.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact |
-| [`pages-deploy.yml`](.github/workflows/pages-deploy.yml) | Download artifact, rewrite `.nojekyll`, mint singleton-release App token, deploy production or preview |
-| [`pages-smoke.yml`](.github/workflows/pages-smoke.yml) | Check out this reusable workflow's own repo and SHA and run [`scripts/smoke-live.mjs`](scripts/smoke-live.mjs) against the live URL |
-| [`self-ci.yml`](.github/workflows/self-ci.yml) | This repo's required checks `self-ci` (actionlint + Azure OIDC policy + live smoke) and `self-test` (`node --check` and script tests) |
-| [`release.yml`](.github/workflows/release.yml) | After those checks pass on `main`, cut annotated `v1.x.y` and move floating `v1` |
+| Area | Workflow or action | Purpose | Caller permissions | Secrets | Status | Known callers |
+| --- | --- | --- | --- | --- | --- | --- |
+| pages | [`pages-build.yml`](.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact | `contents: read` | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
+| pages | [`pages-deploy.yml`](.github/workflows/pages-deploy.yml) | Download artifact, rewrite `.nojekyll`, mint singleton-release App token, deploy production or preview (`dry_run` skips the push) | `contents: read`, `actions: read` | `RELEASE_APP_PRIVATE_KEY` (not required when `dry_run: true`) | active | org starters `pages-production.yml`, `pages-preview.yml` |
+| pages | [`pages-smoke.yml`](.github/workflows/pages-smoke.yml) | Live Pages smoke: HTTP 200, title/root needle, CSS/JS content-types | `contents: read` | none | active | org starters `pages-production.yml`, `pages-preview.yml` |
+| self | [`self-ci.yml`](.github/workflows/self-ci.yml) | Required check `self-ci`: actionlint, shellcheck, policy tests, contract lint, zizmor | n/a (this repo) | none | active | this repository |
+| self | [`self-test.yml`](.github/workflows/self-test.yml) | Required check `self-test`: local Pages fixture build, deploy `dry_run`, live smoke | n/a (this repo) | none | active | this repository |
+| self | [`self-release.yml`](.github/workflows/self-release.yml) | After those checks pass on `main`, cut annotated `v1.x.y` and move floating `v1` | n/a (this repo) | `RELEASE_APP_PRIVATE_KEY` (this repo) | active | this repository |
+| security | [`actions/azure-oidc-login`](actions/azure-oidc-login/README.md) | Azure login via GitHub OIDC; optional Key Vault read | `id-token: write`, `contents: read` | none (OIDC) | active | none in this repo |
+| config | — | Shared config reader | — | — | not built until two callers exist | — |
+| release | — | Shared consumer release-version workflow | — | — | not built until two callers exist | — |
+| lib | — | Shared lib verify/publish | — | — | not built until two callers exist | — |
+| app | — | Shared app verify/image | — | — | not built until two callers exist | — |
+| deploy | — | Shared deploy spool (Pages deploy is under pages) | — | — | not built until two callers exist | — |
+| db | — | Shared db workflows | — | — | not built until two callers exist | — |
+| infra | — | Shared infra workflows | — | — | not built until two callers exist | — |
 
 Org starters (copied into a new repo from the workflow template picker):
 
@@ -89,10 +102,11 @@ caller unless overridden.
 | `artifact_name` | `pages-dist` | Skip download when `preview_action` is `remove` |
 | `pages_base_url` | `""` | Required when `mode` is `preview` |
 | `preview_action` | `deploy` | `deploy` or `remove` |
+| `dry_run` | `false` | Skip minting a token and pushing `gh-pages` |
 
 | Secret | Required | Notes |
 | --- | --- | --- |
-| `RELEASE_APP_PRIVATE_KEY` | yes | Passed by the caller. App ID is `vars.RELEASE_APP_ID` |
+| `RELEASE_APP_PRIVATE_KEY` | unless `dry_run` | Passed by the caller. App ID is `vars.RELEASE_APP_ID` |
 
 The App token is minted as the last setup step and is the only credential
 used to push `gh-pages`. Jobs never use `GITHUB_TOKEN` for deploy.

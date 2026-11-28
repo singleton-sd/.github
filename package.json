@@ -1,0 +1,14 @@
+{
+  "name": "singleton-sd-github-workflows",
+  "private": true,
+  "type": "module",
+  "description": "Tooling for contract lint of shared GitHub Actions workflows",
+  "scripts": {
+    "test": "node --test scripts/*.test.mjs",
+    "lint-contract": "node scripts/lint-contract.mjs",
+    "lint-contract:write-lock": "node scripts/lint-contract.mjs --write-lock"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
