@@ -16,6 +16,8 @@ Naming follows ADR-011 (Singleton SD reusable workflow naming).
   `pages-smoke.yml`. Org starters are `pages-production.yml` and
   `pages-preview.yml`. Reusable security workflow is `security-scan.yml`.
   This repo's required checks are `self-ci` and `self-test`.
+- Never rename a kit's npmjs release workflow file; it is the registered
+  Trusted Publisher.
 - Do not store secrets in this repository. Callers pass secrets through the
   `secrets:` map on `workflow_call` (currently `RELEASE_APP_PRIVATE_KEY`).
 - The singleton-release App ID is read from the caller's `vars.RELEASE_APP_ID`.

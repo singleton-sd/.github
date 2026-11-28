@@ -1,0 +1,7 @@
+{
+  "name": "@singleton-sd-selftest/npm-publish-fixture",
+  "version": "0.0.0-selftest.0",
+  "description": "Local-registry fixture for actions/npm-publish. Never publish to npmjs.",
+  "license": "UNLICENSED",
+  "files": ["index.js"]
+}

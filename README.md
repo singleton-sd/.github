@@ -48,7 +48,8 @@ Releases are cut by [`.github/workflows/self-release.yml`](.github/workflows/sel
 | security | [`actions/azure-oidc-login`](actions/azure-oidc-login/README.md) | Azure login via GitHub OIDC; optional Key Vault read | `id-token: write`, `contents: read` | none (OIDC) | active | none in this repo |
 | config | — | Shared config reader | — | — | not built until two callers exist | — |
 | release | — | Shared consumer release-version workflow | — | — | not built until two callers exist | — |
-| lib | — | Shared lib verify/publish | — | — | not built until two callers exist | — |
+| lib | [`actions/npm-publish`](actions/npm-publish/README.md) | Pack one tarball and `npm publish` with provenance inside the kit's existing `release.yml` job | `id-token: write` | none (OIDC) | active | none yet |
+| lib | — | Shared lib verify/publish (`lib-publish.yml`, GitHub Packages) | — | — | not built until two callers exist | — |
 | app | [`actions/setup-pnpm-node`](actions/setup-pnpm-node/README.md) | pnpm from `packageManager`, Node from `.nvmrc` or docs default | none | none | active | none yet |
 | app | — | Shared app verify/image | — | — | not built until two callers exist | — |
 | deploy | — | Shared deploy spool (Pages deploy is under pages) | — | — | not built until two callers exist | — |
