@@ -39,7 +39,7 @@ uses the local `./actions/setup-pnpm-node` path.
 | Input | Required | Default | Notes |
 | --- | --- | --- | --- |
 | `working_directory` | no | `.` | Package directory relative to the repository root |
-| `cache` | no | `true` | pnpm store cache through `actions/setup-node` `cache: pnpm`. When false, also sets `package-manager-cache: false` so setup-node does not auto-cache from a root npm `package.json`. Cache looks for `pnpm-lock.yaml` in `working_directory`, then parent directories up to the workspace root. |
+| `cache` | no | `true` | pnpm store cache through `actions/setup-node` `cache: pnpm`. When false, also sets `package-manager-cache: false` so setup-node does not auto-cache from a root npm `package.json`. Cache looks for `pnpm-lock.yaml` in `working_directory`, then parent directories up to the workspace root. When cache is on, the action creates the pnpm store directory so setup-node can save an empty cache if the job never runs `pnpm install`. |
 | `node_version_file` | no | `.nvmrc` | Relative to `working_directory`. Used when the file exists |
 | `version` | do not set | empty | Forbidden. The action fails if this is set |
 
