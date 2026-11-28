@@ -1,0 +1,135 @@
+# Pack one tarball and npm publish with Trusted Publishing (OIDC).
+# Never set registry-url on setup-node: that writes always-auth and an empty
+# _authToken, which breaks the OIDC path. This action does not call setup-node.
+# No token input: NODE_AUTH_TOKEN and NPM_TOKEN are rejected.
+name: npm publish
+description: >-
+  Pack exactly one tarball and publish it with npm Trusted Publishing
+  (--provenance on registry.npmjs.org). Idempotent. No tokens. The caller
+  builds before calling; this action does not run npm install or lifecycle
+  scripts.
+inputs:
+  working_directory:
+    description: >-
+      string (optional). Directory relative to the repository root. Combined
+      with package_dir to locate package.json.
+    required: false
+    default: "."
+  package_dir:
+    description: >-
+      string (optional). Package directory relative to working_directory.
+    required: false
+    default: "."
+  access:
+    description: string (optional). npm access, public or restricted.
+    required: false
+    default: "public"
+  tag:
+    description: string (optional). npm dist-tag.
+    required: false
+    default: "latest"
+  dry_run:
+    description: >-
+      string (optional). When true, pass --dry-run to npm publish and still
+      print the tarball file list. Does not publish.
+    required: false
+    default: "false"
+  registry_check:
+    description: >-
+      string (optional). When true, skip with published=false if
+      name@version already exists on the configured registry.
+    required: false
+    default: "true"
+outputs:
+  published:
+    description: true when this run published a new version
+    value: ${{ steps.publish.outputs.published }}
+  version:
+    description: package.json version
+    value: ${{ steps.publish.outputs.version }}
+  tarball:
+    description: packed tarball filename (empty when skipped)
+    value: ${{ steps.publish.outputs.tarball }}
+
+runs:
+  using: composite
+  steps:
+    - name: Guard
+      id: guard
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        PACKAGE_DIR: ${{ inputs.package_dir }}
+      run: |
+        set -euo pipefail
+        REPO_ROOT="$(cd "${GITHUB_ACTION_PATH}/../.." && pwd)"
+        bash "${REPO_ROOT}/scripts/npm-publish-guard.sh"
+
+    - name: Pack and publish
+      id: publish
+      shell: bash
+      env:
+        ACCESS: ${{ inputs.access }}
+        TAG: ${{ inputs.tag }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        REGISTRY_CHECK: ${{ inputs.registry_check }}
+        NAME: ${{ steps.guard.outputs.name }}
+        VERSION: ${{ steps.guard.outputs.version }}
+        PACKAGE_DIR_RESOLVED: ${{ steps.guard.outputs.package-dir }}
+      run: |
+        set -euo pipefail
+        REPO_ROOT="$(cd "${GITHUB_ACTION_PATH}/../.." && pwd)"
+        bash "${REPO_ROOT}/scripts/npm-publish.sh"
+
+    - name: Write job summary
+      shell: bash
+      env:
+        PKG_NAME: ${{ steps.guard.outputs.name }}
+        PKG_VERSION: ${{ steps.publish.outputs.version }}
+        TARBALL: ${{ steps.publish.outputs.tarball }}
+        INTEGRITY: ${{ steps.publish.outputs.integrity }}
+        PUBLISHED: ${{ steps.publish.outputs.published }}
+        SKIP: ${{ steps.publish.outputs.skip }}
+        REASON: ${{ steps.publish.outputs.reason }}
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_PATH: ${{ github.action_path }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        HEAD_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        if [ -z "${GITHUB_STEP_SUMMARY:-}" ]; then
+          echo "::error::GITHUB_STEP_SUMMARY is not set."
+          exit 1
+        fi
+        action_ref="${ACTION_REF:-}"
+        if [ -z "$action_ref" ]; then
+          action_ref_display="(empty; local path, see action_path)"
+        else
+          action_ref_display="$action_ref"
+        fi
+        tarball_display="${TARBALL:-n/a}"
+        integrity_display="${INTEGRITY:-n/a}"
+        if [ "${PUBLISHED}" = true ]; then
+          published_display="yes"
+        else
+          published_display="no"
+        fi
+        {
+          echo "## npm-publish"
+          echo
+          echo "- package: \`${PKG_NAME}\`"
+          echo "- version: \`${PKG_VERSION}\`"
+          echo "- tarball: \`${tarball_display}\`"
+          echo "- integrity: \`${integrity_display}\`"
+          echo "- published: ${published_display}"
+          if [ "${SKIP}" = true ]; then
+            echo "- skipped: already published"
+          elif [ -n "${REASON}" ]; then
+            echo "- reason: \`${REASON}\`"
+          fi
+          echo "- action_ref: \`${action_ref_display}\`"
+          echo "- action_path: \`${ACTION_PATH}\`"
+          echo "- workflow_ref: \`${WORKFLOW_REF}\`"
+          echo "- sha: \`${HEAD_SHA}\`"
+          echo
+        } >> "$GITHUB_STEP_SUMMARY"

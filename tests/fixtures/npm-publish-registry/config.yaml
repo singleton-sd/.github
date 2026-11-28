@@ -1,0 +1,28 @@
+# Verdaccio config for actions/npm-publish self-test.
+# $all publish (no npmjs uplink). npm CLI still needs a runtime login;
+# self-test.yml registers a throwaway user and does not set NODE_AUTH_TOKEN.
+storage: ./storage
+web:
+  enable: false
+auth:
+  htpasswd:
+    file: ./htpasswd
+    # Omit max_users for unlimited registration (default +inf).
+    # max_users: -1 disables registration on Verdaccio 7.
+uplinks: {}
+packages:
+  '@singleton-sd-selftest/*':
+    access: $all
+    publish: $all
+    unpublish: $all
+  '**':
+    access: $all
+    publish: $all
+    unpublish: $all
+middlewares:
+  audit:
+    enabled: false
+log:
+  type: stdout
+  format: pretty
+  level: warn

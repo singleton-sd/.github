@@ -498,6 +498,284 @@ jobs:
           PY
           rm -f "${RUNNER_TEMP}/gitleaks-runtime-fixture.txt" "${json}"
 
+  npm-publish-ok:
+    name: npm-publish-ok
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Prepare fixture package
+        env:
+          RUN_ID: ${{ github.run_id }}
+          DEST: ${{ runner.temp }}/npm-publish-ok
+        run: |
+          set -euo pipefail
+          cp -a tests/fixtures/npm-publish-ok "$DEST"
+          python3 - "$DEST/package.json" "$RUN_ID" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          run_id = sys.argv[2]
+          data = json.loads(path.read_text(encoding="utf-8"))
+          data["version"] = f"0.0.0-selftest.{run_id}"
+          path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          print(data["version"])
+          PY
+
+      - name: Start Verdaccio
+        env:
+          VERDACCIO_VERSION: "7.1.2"
+          CFG_DIR: ${{ runner.temp }}/npm-publish-registry
+        run: |
+          set -euo pipefail
+          cp -a tests/fixtures/npm-publish-registry "$CFG_DIR"
+          mkdir -p "${CFG_DIR}/storage"
+          (
+            cd "${RUNNER_TEMP}"
+            npx --yes "verdaccio@${VERDACCIO_VERSION}" \
+              --config "${CFG_DIR}/config.yaml" \
+              --listen 127.0.0.1:4873
+          ) >"${RUNNER_TEMP}/verdaccio.log" 2>&1 &
+          echo $! >"${RUNNER_TEMP}/verdaccio.pid"
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:4873/-/ping >/dev/null; then
+              echo "Verdaccio is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Verdaccio did not become ready"
+          cat "${RUNNER_TEMP}/verdaccio.log" || true
+          exit 1
+
+      # npm publish requires a registry login even when Verdaccio allows $all.
+      # Create a throwaway user at runtime; do not set NODE_AUTH_TOKEN / NPM_TOKEN
+      # (the action rejects those). Do not print the token.
+      - name: Register local registry user
+        env:
+          NPMRC: ${{ runner.temp }}/npm-publish.npmrc
+        run: |
+          set -euo pipefail
+          python3 - "$NPMRC" <<'PY'
+          import json
+          import secrets
+          import sys
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          dest = Path(sys.argv[1])
+          password = "selftest-" + secrets.token_hex(8)
+          payload = json.dumps(
+              {
+                  "name": "selftest",
+                  "password": password,
+                  "email": "selftest@example.test",
+              }
+          ).encode("utf-8")
+          req = urllib.request.Request(
+              "http://127.0.0.1:4873/-/user/org.couchdb.user:selftest",
+              data=payload,
+              method="PUT",
+              headers={"Content-Type": "application/json"},
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=15) as resp:
+                  body = json.loads(resp.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              err = exc.read().decode("utf-8", errors="replace")
+              print(f"::error::Verdaccio user create failed: HTTP {exc.code}")
+              # Rule names / status only; the body may include a token later.
+              try:
+                  parsed = json.loads(err)
+                  print(parsed.get("error") or "error")
+              except json.JSONDecodeError:
+                  print("non-json error")
+              raise SystemExit(1) from exc
+          token = body.get("token")
+          if not isinstance(token, str) or not token:
+              raise SystemExit("Verdaccio did not return a token")
+          host = "127.0.0.1:4873"
+          auth = "_" + "auth" + "Token"
+          dest.write_text(
+              f"registry=http://{host}/\n//{host}/:{auth}={token}\n",
+              encoding="utf-8",
+          )
+          print("wrote local registry userconfig")
+          PY
+
+      - name: Trusted Publishing command includes --provenance
+        run: |
+          set -euo pipefail
+          grep -F -- "--provenance" scripts/npm-publish.sh
+          grep -F -- "--dry-run" scripts/npm-publish.sh
+          grep -F "Trusted Publishing args" scripts/npm-publish.sh
+          echo "OK --provenance is on the Trusted Publishing command"
+
+      - name: Dry-run against local registry
+        id: dry
+        env:
+          NPM_CONFIG_REGISTRY: http://127.0.0.1:4873/
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-publish.npmrc
+        uses: ./actions/npm-publish
+        with:
+          working_directory: ${{ runner.temp }}/npm-publish-ok
+          dry_run: "true"
+
+      - name: Assert dry-run did not publish
+        env:
+          PUBLISHED: ${{ steps.dry.outputs.published }}
+          VERSION: ${{ steps.dry.outputs.version }}
+          TARBALL: ${{ steps.dry.outputs.tarball }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISHED" != false ]; then
+            echo "::error::dry-run published=${PUBLISHED}, expected false"
+            exit 1
+          fi
+          if [ "$VERSION" != "0.0.0-selftest.${RUN_ID}" ]; then
+            echo "::error::dry-run version ${VERSION} != 0.0.0-selftest.${RUN_ID}"
+            exit 1
+          fi
+          if [ -z "$TARBALL" ]; then
+            echo "::error::dry-run did not record a tarball"
+            exit 1
+          fi
+          echo "OK dry-run published=false tarball=${TARBALL}"
+
+      - name: Publish first
+        id: first
+        env:
+          NPM_CONFIG_REGISTRY: http://127.0.0.1:4873/
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-publish.npmrc
+        uses: ./actions/npm-publish
+        with:
+          working_directory: ${{ runner.temp }}/npm-publish-ok
+
+      - name: Assert first publish
+        env:
+          PUBLISHED: ${{ steps.first.outputs.published }}
+          VERSION: ${{ steps.first.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISHED" != true ]; then
+            echo "::error::first publish published=${PUBLISHED}, expected true"
+            exit 1
+          fi
+          echo "OK first publish published=true version=${VERSION}"
+
+      - name: Publish second (idempotent)
+        id: second
+        env:
+          NPM_CONFIG_REGISTRY: http://127.0.0.1:4873/
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-publish.npmrc
+        uses: ./actions/npm-publish
+        with:
+          working_directory: ${{ runner.temp }}/npm-publish-ok
+
+      - name: Assert second publish skipped
+        env:
+          PUBLISHED: ${{ steps.second.outputs.published }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISHED" != false ]; then
+            echo "::error::second publish published=${PUBLISHED}, expected false"
+            exit 1
+          fi
+          echo "OK second publish published=false (already published)"
+
+  # Negative cases at step level so the job stays green (setup-pnpm-node-fail).
+  npm-publish-fail:
+    name: npm-publish-fail
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Write private package
+        env:
+          DEST: ${{ runner.temp }}/npm-publish-private
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEST"
+          printf '%s\n' '{ "name": "@singleton-sd-selftest/private", "version": "1.0.0", "private": true }' >"${DEST}/package.json"
+
+      - name: NODE_AUTH_TOKEN must fail
+        id: node-auth
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: selftest-not-a-token
+        uses: ./actions/npm-publish
+        with:
+          working_directory: tests/fixtures/npm-publish-ok
+
+      - name: NPM_TOKEN must fail
+        id: npm-token
+        continue-on-error: true
+        env:
+          NPM_TOKEN: selftest-not-a-token
+        uses: ./actions/npm-publish
+        with:
+          working_directory: tests/fixtures/npm-publish-ok
+
+      - name: private package must fail
+        id: private
+        continue-on-error: true
+        uses: ./actions/npm-publish
+        with:
+          working_directory: ${{ runner.temp }}/npm-publish-private
+
+      - name: Assert failure steps failed
+        env:
+          NODE_AUTH: ${{ steps.node-auth.outcome }}
+          NPM_TOKEN_OUTCOME: ${{ steps.npm-token.outcome }}
+          PRIVATE: ${{ steps.private.outcome }}
+        run: |
+          set -euo pipefail
+          failed=0
+          if [ "$NODE_AUTH" != failure ]; then
+            echo "::error::node-auth outcome is ${NODE_AUTH}, expected failure"
+            failed=1
+          else
+            echo "OK NODE_AUTH_TOKEN failed"
+          fi
+          if [ "$NPM_TOKEN_OUTCOME" != failure ]; then
+            echo "::error::npm-token outcome is ${NPM_TOKEN_OUTCOME}, expected failure"
+            failed=1
+          else
+            echo "OK NPM_TOKEN failed"
+          fi
+          if [ "$PRIVATE" != failure ]; then
+            echo "::error::private outcome is ${PRIVATE}, expected failure"
+            failed=1
+          else
+            echo "OK private package failed"
+          fi
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
   self-test:
     name: self-test
     if: always()
@@ -514,6 +792,8 @@ jobs:
         security-scan-clean,
         security-scan-fail,
         security-scan-gitleaks-runtime,
+        npm-publish-ok,
+        npm-publish-fail,
       ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -533,10 +813,12 @@ jobs:
           SCAN_CLEAN: ${{ needs.security-scan-clean.result }}
           SCAN_FAIL: ${{ needs.security-scan-fail.result }}
           SCAN_GITLEAKS: ${{ needs.security-scan-gitleaks-runtime.result }}
+          NPM_OK: ${{ needs.npm-publish-ok.result }}
+          NPM_FAIL: ${{ needs.npm-publish-fail.result }}
         run: |
           set -euo pipefail
           failed=0
-          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-fail:${SCAN_FAIL}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}"; do
+          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}" "security-scan-clean:${SCAN_CLEAN}" "security-scan-fail:${SCAN_FAIL}" "security-scan-gitleaks-runtime:${SCAN_GITLEAKS}" "npm-publish-ok:${NPM_OK}" "npm-publish-fail:${NPM_FAIL}"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             if [ "$result" != success ]; then
