@@ -2,12 +2,16 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$ROOT/scripts/next-release-tag.sh"
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "$WORKDIR"' EXIT
+OUT="$WORKDIR/out.txt"
+ERR="$WORKDIR/err.txt"
 
 run() {
   local tags="$1" labels="$2" commit_tags="$3"
   set +e
   TAGS="$tags" LABELS="$labels" COMMIT_TAGS="$commit_tags" \
-    bash "$SCRIPT" >/tmp/next-release-out 2>/tmp/next-release-err
+    bash "$SCRIPT" >"$OUT" 2>"$ERR"
   local got=$?
   set -e
   printf '%s' "$got"
@@ -19,15 +23,15 @@ expect() {
   got="$(run "$tags" "$labels" "$commit_tags")"
   if [ "$got" -ne "$want_code" ]; then
     echo "FAIL ${label}: expected exit ${want_code} got ${got}"
-    echo "stdout: $(cat /tmp/next-release-out)"
-    echo "stderr: $(cat /tmp/next-release-err)"
+    echo "stdout: $(cat "$OUT")"
+    echo "stderr: $(cat "$ERR")"
     exit 1
   fi
   local out
-  out="$(cat /tmp/next-release-out)"
+  out="$(cat "$OUT")"
   if [ "$out" != "$want_out" ]; then
     echo "FAIL ${label}: expected stdout '${want_out}' got '${out}'"
-    echo "stderr: $(cat /tmp/next-release-err)"
+    echo "stderr: $(cat "$ERR")"
     exit 1
   fi
   echo "OK ${label}"
@@ -39,17 +43,17 @@ expect_fail_major() {
   got="$(run "$tags" "$labels" "$commit_tags")"
   if [ "$got" -eq 0 ]; then
     echo "FAIL ${label}: expected non-zero exit"
-    cat /tmp/next-release-out /tmp/next-release-err
+    cat "$OUT" "$ERR"
     exit 1
   fi
-  if ! grep -q "release:major" /tmp/next-release-err; then
+  if ! grep -q "release:major" "$ERR"; then
     echo "FAIL ${label}: stderr should mention release:major"
-    cat /tmp/next-release-err
+    cat "$ERR"
     exit 1
   fi
-  if ! grep -q "v2" /tmp/next-release-err; then
+  if ! grep -q "v2" "$ERR"; then
     echo "FAIL ${label}: stderr should mention v2"
-    cat /tmp/next-release-err
+    cat "$ERR"
     exit 1
   fi
   echo "OK ${label}"

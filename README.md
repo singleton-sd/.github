@@ -5,7 +5,7 @@ marketing sites (Pages build, deploy, and live smoke checks).
 
 Naming follows ADR-011 (Singleton SD reusable workflow naming).
 
-Callers **must pin `@v1`**, never `@main`. Do not follow a branch.
+Callers **must pin `@v1` or an immutable `@v1.x.y`**, never `@main`. Do not follow a branch.
 
 This repository stores **no secrets**. Callers pass secrets through the
 `secrets:` map on `workflow_call`. Public build settings are read from the
@@ -25,7 +25,7 @@ The double `.github` is required: `{owner}/{repo}/.github/workflows/{file}@{ref}
 
 | Pin | Meaning |
 | --- | --- |
-| `@v1` | Floating annotated tag. Each green `main` commit moves it, so callers get fixes without changing the pin. |
+| `@v1` | Floating annotated tag. A successful release moves it, so callers get fixes without changing the pin. |
 | `@v1.x.y` | Immutable annotated tag. Pin this to freeze a known workflow revision. |
 
 Releases are cut by [`.github/workflows/release.yml`](.github/workflows/release.yml) after `self-ci` and `self-test` pass on that `main` commit. The job writes an annotated `v1.x.y` tag first, then force-updates only `refs/tags/v1` with the singleton-release App token (`vars.RELEASE_APP_ID` + `secrets.RELEASE_APP_PRIVATE_KEY`). Patch bumps by default; add a `release:minor` label on the merged PR for a minor bump. A `release:major` label fails the job (a v2 line is out of scope). If the commit already has a `v1.x.y` tag, the version tag is left alone and `v1` is pointed at it when checks passed. The first release on a repo with no `v1.x.y` tags is `v1.0.0`. Manual fallback: dispatch **release** on `main` (optional SHA; still requires green checks).

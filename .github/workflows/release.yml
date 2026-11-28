@@ -140,14 +140,21 @@ jobs:
           set -euo pipefail
           tags=""
           commit_tags=""
+          if ! tag_tsv="$(gh api --paginate "repos/${REPO}/tags?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv')"; then
+            echo "::error::Failed to list tags for ${REPO}; refusing to plan a release."
+            exit 1
+          fi
           while IFS=$'\t' read -r name commit_sha || [ -n "${name:-}" ]; do
             [ -z "${name:-}" ] && continue
             tags="${tags}${name}"$'\n'
             if [ "$commit_sha" = "$SHA" ]; then
               commit_tags="${commit_tags}${name}"$'\n'
             fi
-          done < <(gh api --paginate "repos/${REPO}/tags?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv')
-          labels="$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '[.[].labels[].name] | unique | join(" ")')"
+          done <<< "$tag_tsv"
+          if ! labels="$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '[.[].labels[].name] | unique | join(" ")')"; then
+            echo "::error::Failed to read pull request labels for ${SHA}."
+            exit 1
+          fi
           echo "Existing tags:"
           printf '%s' "$tags" | sed '/^$/d' || true
           echo "Labels: ${labels:-none}"
@@ -164,16 +171,28 @@ jobs:
           fi
           need_version=false
           need_v1=false
+          v1_note="no (already at this commit)"
           if [ "$status" = create ]; then
             need_version=true
           fi
-          if [ "$v1_sha" != "$SHA" ]; then
+          if [ -z "$v1_sha" ]; then
             need_v1=true
+          elif [ "$v1_sha" != "$SHA" ]; then
+            cmp_v1="$(gh api "repos/${REPO}/compare/${SHA}...${v1_sha}")"
+            v1_status="$(printf '%s' "$cmp_v1" | jq -r .status)"
+            v1_behind="$(printf '%s' "$cmp_v1" | jq -r .behind_by)"
+            if [ "$v1_status" = ahead ] && [ "$v1_behind" = 0 ]; then
+              echo "Skipping v1 move: ${SHA} is an ancestor of current v1 ${v1_sha}"
+              v1_note="no (target is an ancestor of current v1; not moving backward)"
+            else
+              need_v1=true
+            fi
           fi
           {
             echo "status=${status}"
             echo "tag=${tag}"
             echo "v1_before=${v1_sha}"
+            echo "v1_note=${v1_note}"
             echo "need_version=${need_version}"
             echo "need_v1=${need_v1}"
           } >> "$GITHUB_OUTPUT"
@@ -268,17 +287,18 @@ jobs:
           TAG: ${{ steps.plan.outputs.tag }}
           CREATED: ${{ steps.cut.outputs.created }}
           V1_MOVED: ${{ steps.cut.outputs.v1_moved }}
+          V1_NOTE: ${{ steps.plan.outputs.v1_note }}
           NEED_VERSION: ${{ steps.plan.outputs.need_version }}
           NEED_V1: ${{ steps.plan.outputs.need_v1 }}
         run: |
           set -euo pipefail
           created="${CREATED:-already on this commit}"
-          v1_moved="${V1_MOVED:-no (already at this commit)}"
+          v1_moved="${V1_MOVED:-${V1_NOTE:-no (already at this commit)}}"
           if [ "${NEED_VERSION}" != true ]; then
             created="already on this commit"
           fi
           if [ "${NEED_V1}" != true ]; then
-            v1_moved="no (already at this commit)"
+            v1_moved="${V1_NOTE:-no (already at this commit)}"
           fi
           {
             echo "## Release"
