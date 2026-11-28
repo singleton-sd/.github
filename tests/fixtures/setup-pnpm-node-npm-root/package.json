@@ -1,0 +1,5 @@
+{
+  "name": "setup-pnpm-node-npm-root",
+  "private": true,
+  "packageManager": "npm@10.9.2"
+}

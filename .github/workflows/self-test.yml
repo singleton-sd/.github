@@ -46,10 +46,285 @@ jobs:
       expect_title: LeaseMate
       timeout_ms: 60000
 
+  setup-pnpm-node-ok:
+    name: setup-pnpm-node-ok
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Never runs. Records the nested third-party pins that
+      # ./actions/setup-pnpm-node uses so actions.lock can cover this workflow.
+      - name: Lock nested pnpm pin
+        if: ${{ github.run_attempt == 0 }}
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: tests/fixtures/setup-pnpm-node-ok/package.json
+          run_install: false
+
+      - name: Lock nested Node pin
+        if: ${{ github.run_attempt == 0 }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: tests/fixtures/setup-pnpm-node-ok/.nvmrc
+          cache: pnpm
+          cache-dependency-path: tests/fixtures/setup-pnpm-node-ok/pnpm-lock.yaml
+
+      - name: Set up pnpm and Node
+        id: setup
+        uses: ./actions/setup-pnpm-node
+        with:
+          working_directory: tests/fixtures/setup-pnpm-node-ok
+
+      - name: Assert fixture versions
+        env:
+          GOT_PNPM: ${{ steps.setup.outputs.pnpm-version }}
+          GOT_NODE: ${{ steps.setup.outputs.node-version }}
+          GOT_SOURCE: ${{ steps.setup.outputs.node-source }}
+        run: |
+          set -euo pipefail
+          want_pnpm="$(python3 -c 'import json; print(json.load(open("tests/fixtures/setup-pnpm-node-ok/package.json"))["packageManager"].split("@",1)[1].split("+",1)[0])')"
+          want_node="$(tr -d ' \t\r\n' < tests/fixtures/setup-pnpm-node-ok/.nvmrc)"
+          runtime_pnpm="$(pnpm --version)"
+          got_major="${GOT_NODE%%.*}"
+          if [ "$GOT_PNPM" != "$want_pnpm" ]; then
+            echo "::error::pnpm output ${GOT_PNPM} != fixture ${want_pnpm}"
+            exit 1
+          fi
+          if [ "$runtime_pnpm" != "$want_pnpm" ]; then
+            echo "::error::pnpm --version ${runtime_pnpm} != fixture ${want_pnpm}"
+            exit 1
+          fi
+          if [ "$GOT_SOURCE" != "nvmrc" ]; then
+            echo "::error::node-source ${GOT_SOURCE} != nvmrc"
+            exit 1
+          fi
+          if [ "$got_major" != "$want_node" ]; then
+            echo "::error::node major ${got_major} != fixture ${want_node} (full ${GOT_NODE})"
+            exit 1
+          fi
+          echo "OK pnpm ${GOT_PNPM} node ${GOT_NODE} source ${GOT_SOURCE}"
+
+  setup-pnpm-node-default-node:
+    name: setup-pnpm-node-default-node
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm and Node
+        id: setup
+        uses: ./actions/setup-pnpm-node
+        with:
+          working_directory: tests/fixtures/setup-pnpm-node-default-node
+
+      - name: Assert docs default Node
+        env:
+          GOT_PNPM: ${{ steps.setup.outputs.pnpm-version }}
+          GOT_NODE: ${{ steps.setup.outputs.node-version }}
+          GOT_SOURCE: ${{ steps.setup.outputs.node-source }}
+        run: |
+          set -euo pipefail
+          want_pnpm="$(python3 -c 'import json; print(json.load(open("tests/fixtures/setup-pnpm-node-default-node/package.json"))["packageManager"].split("@",1)[1].split("+",1)[0])')"
+          want_node="$(awk '/^default-node:/{print $2; exit}' docs/versions.md)"
+          got_major="${GOT_NODE%%.*}"
+          if [ "$GOT_PNPM" != "$want_pnpm" ]; then
+            echo "::error::pnpm output ${GOT_PNPM} != fixture ${want_pnpm}"
+            exit 1
+          fi
+          if [ "$GOT_SOURCE" != "default" ]; then
+            echo "::error::node-source ${GOT_SOURCE} != default"
+            exit 1
+          fi
+          if [ -z "$want_node" ] || [ "$got_major" != "$want_node" ]; then
+            echo "::error::node major ${got_major} != docs default ${want_node} (full ${GOT_NODE})"
+            exit 1
+          fi
+          echo "OK pnpm ${GOT_PNPM} node ${GOT_NODE} source ${GOT_SOURCE} default ${want_node}"
+
+  setup-pnpm-node-cache-false:
+    name: setup-pnpm-node-cache-false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm and Node without cache
+        id: setup
+        uses: ./actions/setup-pnpm-node
+        with:
+          working_directory: tests/fixtures/setup-pnpm-node-npm-root/pkg
+          cache: "false"
+
+      - name: Assert fixture versions with cache disabled
+        env:
+          GOT_PNPM: ${{ steps.setup.outputs.pnpm-version }}
+          GOT_NODE: ${{ steps.setup.outputs.node-version }}
+          GOT_SOURCE: ${{ steps.setup.outputs.node-source }}
+        run: |
+          set -euo pipefail
+          want_pnpm="$(python3 -c 'import json; print(json.load(open("tests/fixtures/setup-pnpm-node-npm-root/pkg/package.json"))["packageManager"].split("@",1)[1].split("+",1)[0])')"
+          want_node="$(tr -d ' \t\r\n' < tests/fixtures/setup-pnpm-node-npm-root/pkg/.nvmrc)"
+          runtime_pnpm="$(pnpm --version)"
+          got_major="${GOT_NODE%%.*}"
+          if [ "$GOT_PNPM" != "$want_pnpm" ]; then
+            echo "::error::pnpm output ${GOT_PNPM} != fixture ${want_pnpm}"
+            exit 1
+          fi
+          if [ "$runtime_pnpm" != "$want_pnpm" ]; then
+            echo "::error::pnpm --version ${runtime_pnpm} != fixture ${want_pnpm}"
+            exit 1
+          fi
+          if [ "$GOT_SOURCE" != "nvmrc" ]; then
+            echo "::error::node-source ${GOT_SOURCE} != nvmrc"
+            exit 1
+          fi
+          if [ "$got_major" != "$want_node" ]; then
+            echo "::error::node major ${got_major} != fixture ${want_node} (full ${GOT_NODE})"
+            exit 1
+          fi
+          echo "OK cache=false pnpm ${GOT_PNPM} node ${GOT_NODE}"
+
+  setup-pnpm-node-workspace:
+    name: setup-pnpm-node-workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm and Node from workspace package
+        id: setup
+        uses: ./actions/setup-pnpm-node
+        with:
+          working_directory: tests/fixtures/setup-pnpm-node-workspace/packages/app
+
+      - name: Assert workspace package versions
+        env:
+          GOT_PNPM: ${{ steps.setup.outputs.pnpm-version }}
+          GOT_NODE: ${{ steps.setup.outputs.node-version }}
+          GOT_SOURCE: ${{ steps.setup.outputs.node-source }}
+        run: |
+          set -euo pipefail
+          want_pnpm="$(python3 -c 'import json; print(json.load(open("tests/fixtures/setup-pnpm-node-workspace/packages/app/package.json"))["packageManager"].split("@",1)[1].split("+",1)[0])')"
+          want_node="$(tr -d ' \t\r\n' < tests/fixtures/setup-pnpm-node-workspace/packages/app/.nvmrc)"
+          runtime_pnpm="$(pnpm --version)"
+          got_major="${GOT_NODE%%.*}"
+          if [ "$GOT_PNPM" != "$want_pnpm" ]; then
+            echo "::error::pnpm output ${GOT_PNPM} != fixture ${want_pnpm}"
+            exit 1
+          fi
+          if [ "$runtime_pnpm" != "$want_pnpm" ]; then
+            echo "::error::pnpm --version ${runtime_pnpm} != fixture ${want_pnpm}"
+            exit 1
+          fi
+          if [ "$GOT_SOURCE" != "nvmrc" ]; then
+            echo "::error::node-source ${GOT_SOURCE} != nvmrc"
+            exit 1
+          fi
+          if [ "$got_major" != "$want_node" ]; then
+            echo "::error::node major ${got_major} != fixture ${want_node} (full ${GOT_NODE})"
+            exit 1
+          fi
+          echo "OK workspace pnpm ${GOT_PNPM} node ${GOT_NODE}"
+
+  setup-pnpm-node-fail:
+    name: setup-pnpm-node-fail
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Missing packageManager must fail
+        id: no-pm
+        continue-on-error: true
+        uses: ./actions/setup-pnpm-node
+        with:
+          working_directory: tests/fixtures/setup-pnpm-node-no-pm
+
+      - name: version input must fail
+        id: version-override
+        continue-on-error: true
+        uses: ./actions/setup-pnpm-node
+        with:
+          working_directory: tests/fixtures/setup-pnpm-node-ok
+          version: "9.0.0"
+
+      - name: Conflicting devEngines must fail
+        id: conflict-dev-engines
+        continue-on-error: true
+        uses: ./actions/setup-pnpm-node
+        with:
+          working_directory: tests/fixtures/setup-pnpm-node-dev-engines
+
+      - name: Assert failure steps failed
+        env:
+          NO_PM: ${{ steps.no-pm.outcome }}
+          VERSION_OVERRIDE: ${{ steps.version-override.outcome }}
+          CONFLICT_DEV_ENGINES: ${{ steps.conflict-dev-engines.outcome }}
+        run: |
+          set -euo pipefail
+          failed=0
+          if [ "$NO_PM" != failure ]; then
+            echo "::error::no-pm outcome is ${NO_PM}, expected failure"
+            failed=1
+          else
+            echo "OK no-pm failed"
+          fi
+          if [ "$VERSION_OVERRIDE" != failure ]; then
+            echo "::error::version-override outcome is ${VERSION_OVERRIDE}, expected failure"
+            failed=1
+          else
+            echo "OK version override failed"
+          fi
+          if [ "$CONFLICT_DEV_ENGINES" != failure ]; then
+            echo "::error::conflict-dev-engines outcome is ${CONFLICT_DEV_ENGINES}, expected failure"
+            failed=1
+          else
+            echo "OK conflicting devEngines failed"
+          fi
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
   self-test:
     name: self-test
     if: always()
-    needs: [pages-build, pages-deploy, pages-smoke]
+    needs:
+      [
+        pages-build,
+        pages-deploy,
+        pages-smoke,
+        setup-pnpm-node-ok,
+        setup-pnpm-node-default-node,
+        setup-pnpm-node-cache-false,
+        setup-pnpm-node-workspace,
+        setup-pnpm-node-fail,
+      ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -60,10 +335,15 @@ jobs:
           BUILD: ${{ needs.pages-build.result }}
           DEPLOY: ${{ needs.pages-deploy.result }}
           SMOKE: ${{ needs.pages-smoke.result }}
+          SETUP_OK: ${{ needs.setup-pnpm-node-ok.result }}
+          SETUP_DEFAULT: ${{ needs.setup-pnpm-node-default-node.result }}
+          SETUP_CACHE_FALSE: ${{ needs.setup-pnpm-node-cache-false.result }}
+          SETUP_WORKSPACE: ${{ needs.setup-pnpm-node-workspace.result }}
+          SETUP_FAIL: ${{ needs.setup-pnpm-node-fail.result }}
         run: |
           set -euo pipefail
           failed=0
-          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}"; do
+          for pair in "pages-build:${BUILD}" "pages-deploy:${DEPLOY}" "pages-smoke:${SMOKE}" "setup-pnpm-node-ok:${SETUP_OK}" "setup-pnpm-node-default-node:${SETUP_DEFAULT}" "setup-pnpm-node-cache-false:${SETUP_CACHE_FALSE}" "setup-pnpm-node-workspace:${SETUP_WORKSPACE}" "setup-pnpm-node-fail:${SETUP_FAIL}"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             if [ "$result" != success ]; then

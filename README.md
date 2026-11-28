@@ -48,6 +48,7 @@ Releases are cut by [`.github/workflows/self-release.yml`](.github/workflows/sel
 | config | — | Shared config reader | — | — | not built until two callers exist | — |
 | release | — | Shared consumer release-version workflow | — | — | not built until two callers exist | — |
 | lib | — | Shared lib verify/publish | — | — | not built until two callers exist | — |
+| app | [`actions/setup-pnpm-node`](actions/setup-pnpm-node/README.md) | pnpm from `packageManager`, Node from `.nvmrc` or docs default | none | none | active | none yet |
 | app | — | Shared app verify/image | — | — | not built until two callers exist | — |
 | deploy | — | Shared deploy spool (Pages deploy is under pages) | — | — | not built until two callers exist | — |
 | db | — | Shared db workflows | — | — | not built until two callers exist | — |
