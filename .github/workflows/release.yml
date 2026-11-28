@@ -197,12 +197,28 @@ jobs:
             echo "need_v1=${need_v1}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Require singleton-release App credentials
+        if: steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true'
+        env:
+          APP_ID: ${{ vars.RELEASE_APP_ID || secrets.RELEASE_APP_ID }}
+          HAS_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_ID}" ]; then
+            echo "::error::Set vars.RELEASE_APP_ID or secrets.RELEASE_APP_ID for the singleton-release GitHub App."
+            exit 1
+          fi
+          if [ "${HAS_PRIVATE_KEY}" != true ]; then
+            echo "::error::Set secrets.RELEASE_APP_PRIVATE_KEY for the singleton-release GitHub App."
+            exit 1
+          fi
+
       - name: Mint GitHub App token
         id: app-token
         if: steps.plan.outputs.need_version == 'true' || steps.plan.outputs.need_v1 == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
+          app-id: ${{ vars.RELEASE_APP_ID || secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
