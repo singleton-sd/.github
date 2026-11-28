@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Static regression for working_directory path joins in reusable workflows.
 # Nested example: working_directory=apps/site dist_path=out -> apps/site/out
+# Needles are literal GitHub expressions, not expansions.
+# shellcheck disable=SC2016
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/.github/workflows/pages-build.yml"

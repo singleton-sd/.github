@@ -37,6 +37,9 @@ jobs:
       - name: Run actionlint
         run: actionlint -color .github/workflows/*.yml workflow-templates/*.yml
 
+      - name: Check Azure OIDC policy
+        run: bash scripts/check-azure-oidc-policy.sh
+
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -78,3 +81,12 @@ jobs:
 
       - name: Test working_directory path joins
         run: bash scripts/check-workflow-paths.test.sh
+
+      - name: Test Azure OIDC guard
+        run: bash scripts/azure-oidc-guard.test.sh
+
+      - name: Test Azure Key Vault read
+        run: bash scripts/azure-kv-read.test.sh
+
+      - name: Test Azure OIDC policy guard
+        run: bash scripts/check-azure-oidc-policy.test.sh

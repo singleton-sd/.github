@@ -13,3 +13,6 @@ Naming follows ADR-011 (Singleton SD reusable workflow naming).
 - The singleton-release App ID is read from the caller's `vars.RELEASE_APP_ID`.
 - Do not add consumer-repo changes or an App Configuration reader unless that
   is the PR's stated goal.
+- Any workflow or action that reads Key Vault uses `actions/azure-oidc-login`
+  (OIDC), logs secret names only, and never adds `AZURE_CLIENT_SECRET` or
+  `AZURE_CREDENTIALS`. Do not move ordinary CI to the Oracle runner.
