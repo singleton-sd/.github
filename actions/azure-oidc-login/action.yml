@@ -1,0 +1,98 @@
+# Shared Azure login: GitHub OIDC only. Never pass creds or client-secret.
+# azure/login v3.1.0 (commit a641126d1b8aa4d1fa005f4f92df94a3a4c4c906)
+name: Azure OIDC login
+description: >-
+  Log in to Azure with GitHub OIDC (azure/login) and optionally read Key Vault
+  secrets. OIDC only; log secret names, never values.
+inputs:
+  client-id:
+    description: string (required). Azure Entra application (client) ID. Not a secret.
+    required: true
+  tenant-id:
+    description: string (required). Azure Entra tenant ID. Not a secret.
+    required: true
+  subscription-id:
+    description: string (required). Azure subscription ID. Not a secret.
+    required: true
+  key-vault-name:
+    description: >-
+      string (optional). Azure Key Vault name. Provide together with secrets,
+      or omit both.
+    required: false
+    default: ""
+  secrets:
+    description: >-
+      string (optional). Multiline list, one ENV_NAME=key-vault-secret-name per
+      line. Provide together with key-vault-name, or omit both.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Guard OIDC-only login
+      shell: bash
+      env:
+        KEY_VAULT_NAME: ${{ inputs.key-vault-name }}
+        AZURE_OIDC_SECRETS: ${{ inputs.secrets }}
+      run: |
+        set -euo pipefail
+        kv="${KEY_VAULT_NAME:-}"
+        secs="${AZURE_OIDC_SECRETS:-}"
+        kv="${kv#"${kv%%[![:space:]]*}"}"
+        kv="${kv%"${kv##*[![:space:]]}"}"
+        secs="${secs#"${secs%%[![:space:]]*}"}"
+        secs="${secs%"${secs##*[![:space:]]}"}"
+        if { [ -n "$kv" ] && [ -z "$secs" ]; } || { [ -z "$kv" ] && [ -n "$secs" ]; }; then
+          echo "::error::key-vault-name and secrets must both be set or both be omitted."
+          exit 1
+        fi
+        REPO_ROOT="$(cd "${GITHUB_ACTION_PATH}/../.." && pwd)"
+        bash "${REPO_ROOT}/scripts/azure-oidc-guard.sh"
+
+    - name: Log in to Azure with OIDC
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+
+    - name: Read Key Vault secrets
+      if: ${{ inputs.secrets != '' }}
+      shell: bash
+      env:
+        KEY_VAULT_NAME: ${{ inputs.key-vault-name }}
+        AZURE_OIDC_SECRETS: ${{ inputs.secrets }}
+      run: |
+        set -euo pipefail
+        REPO_ROOT="$(cd "${GITHUB_ACTION_PATH}/../.." && pwd)"
+        bash "${REPO_ROOT}/scripts/azure-kv-read.sh"
+
+    - name: Write OIDC job summary
+      shell: bash
+      env:
+        KEY_VAULT_NAME: ${{ inputs.key-vault-name }}
+        AZURE_OIDC_SECRETS: ${{ inputs.secrets }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        HEAD_SHA: ${{ github.sha }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        if [ -z "${GITHUB_STEP_SUMMARY:-}" ]; then
+          echo "::error::GITHUB_STEP_SUMMARY is not set."
+          exit 1
+        fi
+        utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        {
+          if [ -z "${AZURE_OIDC_SECRETS:-}" ]; then
+            echo "## Azure OIDC login"
+            echo
+            echo "No Key Vault secrets were requested."
+            echo
+          fi
+          echo "- workflow_ref: \`${WORKFLOW_REF}\`"
+          echo "- sha: \`${HEAD_SHA}\`"
+          echo "- run id: \`${RUN_ID}\`"
+          echo "- utc: \`${utc}\`"
+          echo
+        } >> "$GITHUB_STEP_SUMMARY"

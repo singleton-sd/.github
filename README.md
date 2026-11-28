@@ -31,7 +31,7 @@ The double `.github` is required: `{owner}/{repo}/.github/workflows/{file}@{ref}
 | [`pages-build.yml`](.github/workflows/pages-build.yml) | Install, format, lint, test, Turnstile check, build, SEO/a11y, write `dist/.nojekyll`, upload artifact |
 | [`pages-deploy.yml`](.github/workflows/pages-deploy.yml) | Download artifact, rewrite `.nojekyll`, mint singleton-release App token, deploy production or preview |
 | [`pages-smoke.yml`](.github/workflows/pages-smoke.yml) | Check out this reusable workflow's own repo and SHA and run [`scripts/smoke-live.mjs`](scripts/smoke-live.mjs) against the live URL |
-| [`self-ci.yml`](.github/workflows/self-ci.yml) | This repo's required checks `self-ci` (actionlint + live smoke) and `self-test` (`node --check` and script tests) |
+| [`self-ci.yml`](.github/workflows/self-ci.yml) | This repo's required checks `self-ci` (actionlint + Azure OIDC policy + live smoke) and `self-test` (`node --check` and script tests) |
 
 Org starters (copied into a new repo from the workflow template picker):
 
@@ -40,6 +40,14 @@ Org starters (copied into a new repo from the workflow template picker):
 
 Visual-review, sticky preview comments, and extra Playwright jobs stay in the
 caller.
+
+## Key Vault access (ADR-012)
+
+Any workflow or action that reads Key Vault must use
+[`actions/azure-oidc-login`](actions/azure-oidc-login/README.md) (GitHub OIDC
+via `azure/login`). OIDC only: no client secret, log secret names never
+values. Ordinary CI stays on `ubuntu-latest`, not the Oracle self-hosted
+runner.
 
 ## Inputs and secrets
 
